@@ -1,7 +1,7 @@
 import streamlit as st
 import matplotlib
 
-matplotlib.use('Agg')  # ใช้ Backend เบื้องหลังเพื่อความเสถียร
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
@@ -11,27 +11,40 @@ import requests
 from fpdf import FPDF
 
 # ==========================================
-# 1. SETUP & FONT LOADER
+# 1. SETUP & ROBUST FONT LOADER
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
 
 def check_font():
-    """ดาวน์โหลดฟอนต์ THSarabunNew เพื่อรองรับภาษาไทย"""
+    """ดาวน์โหลดฟอนต์ THSarabunNew (มี Link สำรอง)"""
     font_name = "THSarabunNew.ttf"
-    if not os.path.exists(font_name):
+
+    # ถ้ามีไฟล์แล้ว ไม่ต้องโหลดใหม่
+    if os.path.exists(font_name) and os.path.getsize(font_name) > 1000:
+        return font_name
+
+    urls = [
+        "https://github.com/nutjunkie/thaifonts/raw/master/THSarabunNew.ttf",
+        "https://raw.githubusercontent.com/fpdf2/fpdf2/master/test/fonts/THSarabunNew.ttf"
+    ]
+
+    for url in urls:
         try:
-            # ลิงก์ดาวน์โหลดฟอนต์ (GitHub Raw)
-            url = "https://github.com/nutjunkie/thaifonts/raw/master/THSarabunNew.ttf"
-            r = requests.get(url, allow_redirects=True)
-            with open(font_name, 'wb') as f:
-                f.write(r.content)
+            r = requests.get(url, allow_redirects=True, timeout=10)
+            if r.status_code == 200:
+                with open(font_name, 'wb') as f:
+                    f.write(r.content)
+                return font_name
         except:
-            return None
-    return font_name if os.path.exists(font_name) else None
+            continue
+
+    return None
 
 
-# Database เหล็กเสริม
+# ==========================================
+# 2. DATABASE & HELPER
+# ==========================================
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
     'RB9': {'A_cm2': 0.636, 'd_mm': 9},
@@ -55,7 +68,7 @@ def fmt(n, digits=3):
 
 
 # ==========================================
-# 2. CALCULATION ENGINE
+# 3. CALCULATION LOGIC
 # ==========================================
 def beta1FromFc(fc_MPa):
     if fc_MPa <= 28: return 0.85
@@ -123,7 +136,7 @@ def process_calculation(inputs):
     calc_rows = []
 
     def sec(title):
-        calc_rows.append(["SECTION", title, "", "", "", "", ""])  # เพิ่มช่องว่างให้ครบ 6 ช่อง
+        calc_rows.append(["SECTION", title, "", "", "", "", ""])
 
     def row(item, formula, subs, result, unit, status=""):
         calc_rows.append([item, formula, subs, result, unit, status])
@@ -195,7 +208,6 @@ def process_calculation(inputs):
         passStr = rProv['phiMn'] >= Mu_Nmm
         passMax = As_req <= As_max + 1
 
-        # Check spacing
         usable = bw - 2.0 * (cover + db_st)
         clear = (usable - n * db_main) / (n - 1) if n > 1 else usable - db_main
         req_clr = max(db_main, 25.0, 4.0 * agg_mm / 3.0)
@@ -205,7 +217,6 @@ def process_calculation(inputs):
         if not overall: flex_ok = False
         bar_counts[key] = n
 
-        # เพิ่มข้อมูลลงตาราง (Mu, Provide, Check)
         row(f"{title} Mu", "-", "-", f"{fmt(Mu_tfm, 3)}", "tf-m", "")
         row(f"{title} Prov", f"Use {barKey}", f"{n}-{barKey}", "OK" if overall else "NO", "-", "OK")
         row(f"{title} Check", "φMn ≥ Mu", f"{fmt(rProv['phiMn'] / 9.8e6, 3)}", "PASS" if passStr else "FAIL", "tf-m",
@@ -247,7 +258,6 @@ def process_calculation(inputs):
         if needVs: s_sel = min(s_sel, s_req)
         s_sel = math.floor(s_sel / 25.0) * 25.0
         s_sel = max(50.0, s_sel)
-
         Vs_prov = (Av * fyt * d) / s_sel
         phiVn = phi_v * (Vc_N + Vs_prov)
         passStr = Vu_N <= phiVn + 1
@@ -266,35 +276,31 @@ def process_calculation(inputs):
 
 
 # ==========================================
-# 3. PDF GENERATION
+# 3. PDF GENERATION (FIXED FONT)
 # ==========================================
 class PDF(FPDF):
     def header(self):
-        # Header จะถูกสร้างในฟังก์ชันหลักเพื่อจัดการเรื่อง Font
-        pass
+        pass  # Handle manually
 
 
 def create_pdf_bytes(inputs, rows, img_files):
     pdf = PDF()
 
-    # 1. โหลดฟอนต์ (สำคัญมาก!)
+    # 1. โหลดฟอนต์ (บังคับโหลดให้ได้)
     font_path = check_font()
-    has_thai = False
+    if not font_path:
+        # ถ้าโหลดไม่ได้จริงๆ ให้ใช้ Arial (แต่จะแจ้งเตือนใน UI)
+        has_thai = False
+        st.error("⚠️ ไม่สามารถโหลดฟอนต์ภาษาไทยได้ รายงานจะแสดงเป็นภาษาอังกฤษ")
+    else:
+        has_thai = True
+        pdf.add_font('THSarabunNew', '', font_path, uni=True)
+        pdf.add_font('THSarabunNew', 'B', font_path, uni=True)
 
-    # ตรวจสอบว่าโหลดฟอนต์สำเร็จหรือไม่
-    if font_path and os.path.exists(font_path):
-        try:
-            pdf.add_font('THSarabunNew', '', font_path, uni=True)
-            pdf.add_font('THSarabunNew', 'B', font_path, uni=True)
-            has_thai = True
-        except:
-            pass
-
-    # ฟังก์ชันกรองข้อความ (Sanitize)
     def txt(s):
         s = str(s)
         if has_thai: return s
-        # ถ้าไม่มีฟอนต์ไทย ให้ตัดตัวอักษรไทยออกเพื่อป้องกัน Error Latin-1
+        # Safe Mode: ตัดคำไทยทิ้งถ้าไม่มีฟอนต์
         return s.encode('latin-1', 'ignore').decode('latin-1')
 
     pdf.add_page()
@@ -303,7 +309,7 @@ def create_pdf_bytes(inputs, rows, img_files):
     if has_thai:
         header_font = ('THSarabunNew', 'B', 16)
         body_font = ('THSarabunNew', '', 14)
-        table_font = ('THSarabunNew', '', 12)  # ลดขนาดฟอนต์ตาราง
+        table_font = ('THSarabunNew', '', 12)
     else:
         header_font = ('Arial', 'B', 12)
         body_font = ('Arial', '', 10)
@@ -328,7 +334,7 @@ def create_pdf_bytes(inputs, rows, img_files):
     pdf.cell(0, 8, "ACI 318-19", 0, 1)
     pdf.ln(5)
 
-    # --- Materials & Section ---
+    # --- Material Box ---
     pdf.set_fill_color(245, 245, 245)
     pdf.rect(10, pdf.get_y(), 90, 30, 'F')
     pdf.rect(105, pdf.get_y(), 95, 30, 'F')
@@ -368,11 +374,11 @@ def create_pdf_bytes(inputs, rows, img_files):
     pdf.set_font(header_font[0], 'B', 14 if has_thai else 12)
     pdf.cell(0, 10, txt("Calculation Details"), 0, 1)
 
-    # Table Header (เพิ่มช่อง Status และปรับความกว้าง)
+    # Table Header (Adjusted Widths)
     pdf.set_fill_color(220, 220, 220)
     pdf.set_font(header_font[0], 'B', 12 if has_thai else 10)
-    # Col Widths: Item, Formula, Sub, Res, Unit, Status (Total ~190)
-    cols = [40, 45, 40, 25, 15, 25]
+    # Col Widths: Item, Formula, Sub, Res, Unit, Status
+    cols = [35, 45, 45, 20, 15, 30]
     headers = ["Item", "Formula", "Substitution", "Result", "Unit", "Status"]
 
     for i, h in enumerate(headers):
@@ -384,25 +390,24 @@ def create_pdf_bytes(inputs, rows, img_files):
     for r in rows:
         if r[0] == "SECTION":
             pdf.set_fill_color(240, 240, 240)
-            # Merge cell for section header
             pdf.cell(sum(cols), 7, txt(r[1]), 1, 1, 'L', True)
         else:
-            # ใช้ MultiCell สำหรับช่องที่อาจยาวเกิน หรือตัดคำ
-            # ในที่นี้ใช้ Cell ธรรมดาแต่ลดขนาดฟอนต์แล้ว
             pdf.cell(cols[0], 7, txt(str(r[0])), 1)
             pdf.cell(cols[1], 7, txt(str(r[1])), 1)
             pdf.cell(cols[2], 7, txt(str(r[2])), 1)
             pdf.cell(cols[3], 7, txt(str(r[3])), 1)
             pdf.cell(cols[4], 7, txt(str(r[4])), 1)
 
-            # Status Column (r[5])
+            # Status
             status_txt = txt(str(r[5]))
-            pdf.set_text_color(0, 100, 0) if "OK" in status_txt or "PASS" in status_txt else pdf.set_text_color(200, 0,
-                                                                                                                0)
+            if "OK" in status_txt or "PASS" in status_txt:
+                pdf.set_text_color(0, 100, 0)
+            elif "NO" in status_txt or "FAIL" in status_txt:
+                pdf.set_text_color(200, 0, 0)
             pdf.cell(cols[5], 7, status_txt, 1, 1, 'C')
-            pdf.set_text_color(0, 0, 0)  # Reset color
+            pdf.set_text_color(0, 0, 0)
 
-    # Binary Write (Safe)
+    # Save
     temp = "report.pdf"
     pdf.output(temp)
     with open(temp, "rb") as f:
@@ -468,8 +473,9 @@ if 'calc_done' not in st.session_state:
 
 with st.sidebar.form("inputs"):
     st.header("Project Info")
-    project_name = st.text_input("Project Name", value="อาคารพักอาศัย 2 ชั้น")
-    engineer_name = st.text_input("Engineer Name", value="นายสมชาย ใจดี")
+    # --- UPDATED DEFAULT VALUES ---
+    project_name = st.text_input("Project Name", value="อาคารสำนักงาน 2 ชั้น")
+    engineer_name = st.text_input("Engineer Name", value="นายไกรฤทธิ์ ด่านพิทักษ์")
 
     st.header("1. Parameters")
     c1, c2, c3 = st.columns(3)
@@ -523,14 +529,12 @@ if run_btn:
 
     rows, bars, shears = process_calculation(inputs)
 
-    # Store in session state
     st.session_state['data'] = inputs
     st.session_state['rows'] = rows
     st.session_state['bars'] = bars
     st.session_state['shears'] = shears
     st.session_state['calc_done'] = True
 
-# --- Persistent Result View ---
 if st.session_state.get('calc_done'):
     data = st.session_state['data']
     rows = st.session_state['rows']
@@ -568,7 +572,6 @@ if st.session_state.get('calc_done'):
 
     st.write("---")
 
-    # Generate PDF
     pdf_bytes = create_pdf_bytes(data, rows, img_files)
 
     st.download_button(
