@@ -5,49 +5,55 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
-import numpy as np
-import os
-import requests
-from fpdf import FPDF
+import streamlit.components.v1 as components
 
 # ==========================================
-# 1. SETUP & FONT LOADER (CRITICAL FIX)
+# 1. SETUP & CSS FOR PRINTING
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
+# CSS สำหรับจัดหน้าตอนพิมพ์ (ซ่อน Sidebar, ขยายเต็มจอ)
+st.markdown("""
+<style>
+    /* สไตล์สำหรับตารางรายงาน */
+    .report-table {width: 100%; border-collapse: collapse; font-family: 'Sarabun', sans-serif;}
+    .report-table th, .report-table td {border: 1px solid #333; padding: 8px; font-size: 14px;}
+    .report-table th {background-color: #f0f0f0; text-align: left; font-weight: bold;}
 
-def get_font_path():
-    """ดาวน์โหลดฟอนต์และคืนค่า path"""
-    font_name = "THSarabunNew.ttf"
+    .pass-ok {color: green; font-weight: bold;}
+    .pass-no {color: red; font-weight: bold;}
+    .sec-row {background-color: #e6e6e6; font-weight: bold; font-size: 15px;}
 
-    # ถ้ามีไฟล์แล้วและขนาดถูกต้อง (ไม่เป็นไฟล์เสีย) ให้ใช้ได้เลย
-    if os.path.exists(font_name) and os.path.getsize(font_name) > 50000:
-        return font_name
+    /* ตั้งค่าโหมดพิมพ์ (Print Media Query) */
+    @media print {
+        /* ซ่อน Sidebar และ Header ของ Streamlit */
+        section[data-testid="stSidebar"] {display: none !important;}
+        header {display: none !important;}
+        .stDeployButton {display: none !important;}
+        footer {display: none !important;}
 
-    # ลิงก์สำรองหลายทางเลือก
-    urls = [
-        "https://github.com/nutjunkie/thaifonts/raw/master/THSarabunNew.ttf",
-        "https://raw.githubusercontent.com/fpdf2/fpdf2/master/test/fonts/THSarabunNew.ttf"
-    ]
+        /* ซ่อนปุ่มกดต่างๆ */
+        .stButton {display: none !important;}
+        button {display: none !important;}
 
-    for url in urls:
-        try:
-            r = requests.get(url, allow_redirects=True, timeout=10)
-            if r.status_code == 200:
-                with open(font_name, 'wb') as f:
-                    f.write(r.content)
-                return font_name
-        except:
-            continue
+        /* ปรับพื้นที่เนื้อหาให้เต็มกระดาษ */
+        .main .block-container {
+            max-width: 100% !important;
+            padding: 1cm !important;
+            margin: 0 !important;
+        }
 
-    return None
-
-
-# โหลดฟอนต์ตั้งแต่เริ่มโปรแกรม
-font_path = get_font_path()
+        /* บังคับให้พิมพ์พื้นหลัง (เพื่อให้เห็นสีตาราง) */
+        * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE
+# 2. DATABASE & HELPER
 # ==========================================
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
@@ -112,6 +118,7 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
     T = As_mm2 * fs
     Mn = T * (d - a / 2.0)
     phiMn = phi * Mn
+
     return {'phi': phi, 'phiMn': phiMn, 'eps_t': eps_t}
 
 
@@ -267,150 +274,14 @@ def process_calculation(inputs):
             status_shear)
 
     sec("4. FINAL STATUS")
-    row("Overall", "-", "-", "OK" if (flex_ok and shear_ok) else "NOT OK", "-", "")
+    final_status = "OK" if (flex_ok and shear_ok) else "NOT OK"
+    row("Overall", "-", "-", final_status, "-", final_status)
     return calc_rows, bar_counts, shear_res
 
 
 # ==========================================
-# 3. PDF GENERATION
+# 4. PLOTTING
 # ==========================================
-class PDF(FPDF):
-    def header(self):
-        pass
-
-
-def create_pdf_bytes(inputs, rows, img_files):
-    pdf = PDF()
-
-    # ใช้ฟอนต์ที่โหลดมา
-    has_thai = False
-    if font_path and os.path.exists(font_path):
-        try:
-            pdf.add_font('THSarabunNew', '', font_path, uni=True)
-            pdf.add_font('THSarabunNew', 'B', font_path, uni=True)
-            has_thai = True
-        except:
-            pass
-
-    # ฟังก์ชันช่วยพิมพ์ข้อความ (ถ้าไม่มีฟอนต์ไทย จะตัดคำไทยออก)
-    def txt(s):
-        s = str(s)
-        if has_thai: return s
-        return s.encode('latin-1', 'ignore').decode('latin-1')
-
-    pdf.add_page()
-
-    # Config Font Size
-    if has_thai:
-        header_font = ('THSarabunNew', 'B', 16)
-        body_font = ('THSarabunNew', '', 14)
-        table_font = ('THSarabunNew', '', 12)
-    else:
-        header_font = ('Arial', 'B', 12)
-        body_font = ('Arial', '', 10)
-        table_font = ('Arial', '', 9)
-
-    # --- Header ---
-    pdf.set_font(*header_font)
-    pdf.cell(0, 10, txt('ENGINEERING DESIGN REPORT'), 0, 1, 'C')
-    pdf.set_font(*body_font)
-    pdf.cell(0, 8, txt('Reinforced Concrete Beam Design (ACI 318-19)'), 0, 1, 'C')
-    pdf.ln(5)
-
-    # --- Project Info ---
-    pdf.cell(30, 8, txt("Project:"), 0)
-    pdf.cell(90, 8, txt(inputs['project']), 0)
-    pdf.cell(20, 8, txt("Date:"), 0)
-    pdf.cell(0, 8, "15/12/2568", 0, 1)
-
-    pdf.cell(30, 8, txt("Engineer:"), 0)
-    pdf.cell(90, 8, txt(inputs['engineer']), 0)
-    pdf.cell(20, 8, txt("Code:"), 0)
-    pdf.cell(0, 8, "ACI 318-19", 0, 1)
-    pdf.ln(5)
-
-    # --- Material Box ---
-    pdf.set_fill_color(245, 245, 245)
-    pdf.rect(10, pdf.get_y(), 90, 30, 'F')
-    pdf.rect(105, pdf.get_y(), 95, 30, 'F')
-
-    pdf.set_xy(12, pdf.get_y() + 2)
-    pdf.set_font(header_font[0], 'B', 14 if has_thai else 11)
-    pdf.cell(80, 8, txt("Materials"), 0, 2)
-    pdf.set_font(*body_font)
-    pdf.cell(80, 6, txt(f"Concrete (fc') = {inputs['fc']} ksc"), 0, 2)
-    pdf.cell(80, 6, txt(f"Main Steel (fy) = {inputs['fy']} ksc"), 0, 0)
-
-    pdf.set_xy(107, pdf.get_y() - 14)
-    pdf.set_font(header_font[0], 'B', 14 if has_thai else 11)
-    pdf.cell(80, 8, txt("Section"), 0, 2)
-    pdf.set_font(*body_font)
-    pdf.cell(80, 6, txt(f"Size = {inputs['b']} x {inputs['h']} cm"), 0, 2)
-    pdf.cell(80, 6, txt(f"Cover = {inputs['cover']} cm"), 0, 0)
-    pdf.ln(15)
-
-    # --- Images ---
-    pdf.ln(5)
-    pdf.set_font(header_font[0], 'B', 14 if has_thai else 12)
-    pdf.cell(0, 10, txt("Design Summary"), 0, 1)
-    y_img = pdf.get_y()
-    w_img = 60
-    if len(img_files) >= 3:
-        try:
-            pdf.image(img_files[0], x=10, y=y_img, w=w_img)
-            pdf.image(img_files[1], x=75, y=y_img, w=w_img)
-            pdf.image(img_files[2], x=140, y=y_img, w=w_img)
-        except:
-            pass
-    pdf.ln(85)
-
-    # --- Table ---
-    pdf.add_page()
-    pdf.set_font(header_font[0], 'B', 14 if has_thai else 12)
-    pdf.cell(0, 10, txt("Calculation Details"), 0, 1)
-
-    pdf.set_fill_color(220, 220, 220)
-    pdf.set_font(header_font[0], 'B', 12 if has_thai else 10)
-
-    # ปรับความกว้างตาราง
-    cols = [35, 45, 45, 20, 15, 30]
-    headers = ["Item", "Formula", "Substitution", "Result", "Unit", "Status"]
-
-    for i, h in enumerate(headers):
-        pdf.cell(cols[i], 8, txt(h), 1, 0, 'C', True)
-    pdf.ln()
-
-    pdf.set_font(*table_font)
-    for r in rows:
-        if r[0] == "SECTION":
-            pdf.set_fill_color(240, 240, 240)
-            pdf.cell(sum(cols), 7, txt(r[1]), 1, 1, 'L', True)
-        else:
-            pdf.cell(cols[0], 7, txt(str(r[0])), 1)
-            pdf.cell(cols[1], 7, txt(str(r[1])), 1)
-            pdf.cell(cols[2], 7, txt(str(r[2])), 1)
-            pdf.cell(cols[3], 7, txt(str(r[3])), 1)
-            pdf.cell(cols[4], 7, txt(str(r[4])), 1)
-
-            status_txt = txt(str(r[5]))
-            if "OK" in status_txt or "PASS" in status_txt:
-                pdf.set_text_color(0, 100, 0)
-            elif "NO" in status_txt or "FAIL" in status_txt:
-                pdf.set_text_color(200, 0, 0)
-            pdf.cell(cols[5], 7, status_txt, 1, 1, 'C')
-            pdf.set_text_color(0, 0, 0)
-
-    temp = "report.pdf"
-    pdf.output(temp)
-    with open(temp, "rb") as f:
-        data = f.read()
-    try:
-        os.remove(temp)
-    except:
-        pass
-    return data
-
-
 def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, bar_name):
     fig, ax = plt.subplots(figsize=(4, 5))
     rect = patches.Rectangle((0, 0), b, h, linewidth=2, edgecolor='#333', facecolor='#FFF')
@@ -445,33 +316,14 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
 
 
 # ==========================================
-# 4. UI MAIN
+# 5. UI MAIN
 # ==========================================
-st.markdown("""
-<style>
-    .report-table {width: 100%; border-collapse: collapse;}
-    .report-table th, .report-table td {border: 1px solid #ddd; padding: 8px; font-size: 14px;}
-    .report-table th {background-color: #f2f2f2; text-align: left;}
-    .pass-ok {color: green; font-weight: bold;}
-    .pass-no {color: red; font-weight: bold;}
-    .sec-row {background-color: #e0e0e0; font-weight: bold;}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("RC Beam Designer Pro (ACI 318-19)")
-
-# แสดงสถานะฟอนต์
-if font_path:
-    st.sidebar.success("✅ โหลดฟอนต์ภาษาไทยสำเร็จ")
-else:
-    st.sidebar.error("⚠️ ไม่พบฟอนต์ภาษาไทย (ใช้ภาษาอังกฤษแทน)")
-
 if 'calc_done' not in st.session_state:
     st.session_state['calc_done'] = False
 
+# Sidebar Inputs
 with st.sidebar.form("inputs"):
     st.header("Project Info")
-    # --- FIXED DEFAULT VALUES HERE ---
     project_name = st.text_input("Project Name", value="อาคารสำนักงาน 2 ชั้น")
     engineer_name = st.text_input("Engineer Name", value="นายไกรฤทธิ์ ด่านพิทักษ์")
 
@@ -524,9 +376,7 @@ if run_btn:
         'mu_R_n': mu_R_n, 'mu_R_p': mu_R_p,
         'vu_L': vu_L, 'vu_M': vu_M, 'vu_R': vu_R
     }
-
     rows, bars, shears = process_calculation(inputs)
-
     st.session_state['data'] = inputs
     st.session_state['rows'] = rows
     st.session_state['bars'] = bars
@@ -538,50 +388,56 @@ if st.session_state.get('calc_done'):
     rows = st.session_state['rows']
     bars = st.session_state['bars']
     shears = st.session_state['shears']
-
-    img_files = []
     m_db = BAR_INFO[data['mainBar']]['d_mm']
     s_db = BAR_INFO[data['stirrupBar']]['d_mm']
 
+    # --- REPORT HEADER ---
+    st.markdown("<h1 style='text-align: center;'>ENGINEERING DESIGN REPORT</h1>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align: center; color: gray;'>Reinforced Concrete Beam Design (ACI 318-19)</h3>",
+                unsafe_allow_html=True)
+    st.write("---")
+
+    # --- INFO BOX ---
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f"**Project:** {data['project']}")
+        st.markdown(f"**Engineer:** {data['engineer']}")
+    with c2:
+        st.markdown("**Date:** 15/12/2568")
+        st.markdown("**Code:** ACI 318-19")
+
+    st.write("---")
+
+    # --- MATERIALS & SECTION ---
+    c1, c2 = st.columns(2)
+    with c1:
+        st.info(f"**Materials:**\n- fc' = {data['fc']} ksc\n- fy = {data['fy']} ksc\n- fyt = {data['fyt']} ksc")
+    with c2:
+        st.success(f"**Section:**\n- Size = {data['b']} x {data['h']} cm\n- Cover = {data['cover']} cm")
+
+    # --- GRAPHICS ---
+    st.subheader("Design Summary")
     col1, col2, col3 = st.columns(3)
     with col1:
         fig1 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('L_TOP', 2), bars.get('L_BOT', 2),
                                    f"@{shears['V_L'] / 10:.0f}cm", m_db, s_db, "Left Support", data['mainBar'])
         st.pyplot(fig1)
-        fig1.savefig("temp_L.png", dpi=100, bbox_inches='tight')
-        img_files.append("temp_L.png")
         plt.close(fig1)
-
     with col2:
         fig2 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('M_TOP', 2), bars.get('M_BOT', 2),
                                    f"@{shears['V_M'] / 10:.0f}cm", m_db, s_db, "Mid Span", data['mainBar'])
         st.pyplot(fig2)
-        fig2.savefig("temp_M.png", dpi=100, bbox_inches='tight')
-        img_files.append("temp_M.png")
         plt.close(fig2)
-
     with col3:
         fig3 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('R_TOP', 2), bars.get('R_BOT', 2),
                                    f"@{shears['V_R'] / 10:.0f}cm", m_db, s_db, "Right Support", data['mainBar'])
         st.pyplot(fig3)
-        fig3.savefig("temp_R.png", dpi=100, bbox_inches='tight')
-        img_files.append("temp_R.png")
         plt.close(fig3)
 
-    st.write("---")
-
-    pdf_bytes = create_pdf_bytes(data, rows, img_files)
-
-    st.download_button(
-        label="🖨️ Print / Download Report (PDF)",
-        data=pdf_bytes,
-        file_name="Beam_Design_Report.pdf",
-        mime="application/pdf"
-    )
-
-    st.markdown("### Calculation Report")
+    # --- CALCULATION DETAILS ---
+    st.subheader("Calculation Details")
     html = "<table class='report-table'>"
-    html += "<tr><th>Item</th><th>Formula</th><th>Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr>"
+    html += "<tr><th style='width:30%'>Item</th><th style='width:30%'>Formula</th><th style='width:20%'>Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr>"
     for r in rows:
         if r[0] == "SECTION":
             html += f"<tr class='sec-row'><td colspan='6'>{r[1]}</td></tr>"
@@ -590,6 +446,32 @@ if st.session_state.get('calc_done'):
             html += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td><td class='{cls}'>{r[5]}</td></tr>"
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
+    st.write("---")
+
+    # --- PRINT BUTTON (DIRECT BROWSER PRINT) ---
+    st.info(
+        "💡 กดปุ่มด้านล่างเพื่อพิมพ์รายงาน (หากต้องการ Save เป็น PDF ให้เลือก Destination เป็น 'Save as PDF' ในหน้าต่างพิมพ์)")
+
+    # Inject JavaScript for Printing
+    components.html("""
+        <div style="text-align: center; margin-top: 20px;">
+            <button onclick="window.print()" style="
+                background-color: #008CBA; 
+                border: none; 
+                color: white; 
+                padding: 15px 32px; 
+                text-align: center; 
+                text-decoration: none; 
+                display: inline-block; 
+                font-size: 16px; 
+                margin: 4px 2px; 
+                cursor: pointer; 
+                border-radius: 8px;
+                font-weight: bold;">
+                🖨️ พิมพ์รายงาน / บันทึกเป็น PDF (Print)
+            </button>
+        </div>
+    """, height=100)
 
 else:
-    st.info("👈 Please enter parameters and click 'Run Calculation'")
+    st.info("👈 กรุณากรอกข้อมูลทางด้านซ้าย แล้วกดปุ่ม 'Run Calculation' เพื่อเริ่มคำนวณ")
