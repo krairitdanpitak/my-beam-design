@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
 import numpy as np
-import pandas as pd
 
 # ==========================================
 # 1. DATABASE & CONFIG
@@ -24,7 +23,6 @@ BAR_INFO = {
 
 
 def fmt(n, digits=3):
-    """Format helper"""
     try:
         if n is None: return "-"
         val = float(n)
@@ -38,29 +36,25 @@ def fmt(n, digits=3):
 # 2. CALCULATION LOGIC (ACI 318-19)
 # ==========================================
 def beta1FromFc(fc_MPa):
-    """(Source)"""
     if fc_MPa <= 28: return 0.85
     b1 = 0.85 - 0.05 * ((fc_MPa - 28) / 7)
     return max(0.65, b1)
 
 
 def phiFlexureFromStrain(eps_t):
-    """(Source)"""
     if eps_t <= 0.002: return 0.65
     if eps_t >= 0.005: return 0.90
     return 0.65 + (eps_t - 0.002) * (0.25 / 0.003)
 
 
 def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
-    """Iteration for equilibrium (Source)"""
     beta1 = beta1FromFc(fc)
     fs = fy
-
     # Initial guess
     a = (As_mm2 * fs) / (0.85 * fc * bw) if fc > 0 else 0
     c = a / beta1 if beta1 > 0 else 0
 
-    # Iterate
+    # Iterate for equilibrium
     for i in range(50):
         if c <= 0.1: c = 0.1
         eps_t = eps_cu * (d - c) / c
@@ -70,11 +64,11 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
         a_new = (As_mm2 * fs_new) / (0.85 * fc * bw)
 
         if abs(fs_new - fs) < 0.1 and abs(a_new - a) < 0.1:
-            fs = fs_new
-            a = a_new
+            fs = fs_new;
+            a = a_new;
             break
-        fs = fs_new
-        a = a_new
+        fs = fs_new;
+        a = a_new;
         c = a / beta1
 
     c = a / beta1
@@ -85,11 +79,10 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
     Mn = T * (d - a / 2.0)
     phiMn = phi * Mn
 
-    return {'beta1': beta1, 'a': a, 'c': c, 'eps_t': eps_t, 'fs': fs, 'phi': phi, 'Mn': Mn, 'phiMn': phiMn}
+    return {'phi': phi, 'phiMn': phiMn}
 
 
 def solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d):
-    """Helper function to solve As (Fixes indentation issues)"""
     As_lo = As_min
     As_hi = As_lo
 
@@ -98,9 +91,7 @@ def solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d):
         r = flexureSectionResponse(As_hi, fc, fy, bw, d)
         if r['phiMn'] >= Mu_Nmm: break
         As_hi *= 1.3
-        if As_hi > As_max:
-            As_hi = As_max
-            break
+        if As_hi > As_max: As_hi = As_max; break
 
     # Binary Search
     As_req = As_hi
@@ -116,10 +107,10 @@ def solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d):
 
 
 def process_calculation(inputs):
-    """Main Logic"""
     calc_rows = []
 
-    def sec(title): calc_rows.append(["SECTION", title, "", "", "", ""])
+    def sec(title):
+        calc_rows.append(["SECTION", title, "", "", "", ""])
 
     def row(item, formula, subs, result, unit, status=""):
         calc_rows.append([item, formula, subs, result, unit, status])
@@ -141,12 +132,11 @@ def process_calculation(inputs):
 
     barKey = inputs['mainBar']
     stirKey = inputs['stirrupBar']
-
     db_st = BAR_INFO[stirKey]['d_mm']
     db_main = BAR_INFO[barKey]['d_mm']
     d = h - cover - db_st - db_main / 2.0
 
-    # 2. Header Rows
+    # 2. Parameters
     sec("1. MATERIAL & SECTION PARAMETERS")
     beta1 = beta1FromFc(fc)
 
@@ -161,12 +151,52 @@ def process_calculation(inputs):
     rho_bal = 0.85 * beta1 * (fc / fy) * (eps_cu / (eps_cu + eps_y))
     As_max = 0.75 * rho_bal * bw * d
 
-    row("Materials", "-", f"fc'={fmt(fc, 2)} MPa, fy={fmt(fy, 2)} MPa", "-", "-")
+    row("Materials", "-", f"fc'={fmt(fc, 2)} MPa", "-", "-")
     row("Section", "-", f"{fmt(bw, 0)} x {fmt(h, 0)} mm", "-", "mm")
     row("As,min", "max(0.25√fc'/fy, 1.4/fy)bd", "-", f"{fmt(As_min, 0)}", "mm²")
 
     # 3. FLEXURE
     sec("2. FLEXURE DESIGN")
 
+    # Define MuCases carefully to avoid line wrap issues
     MuCases = [
-        {'key': "L_
+        {'key': "L_TOP", 't': "Left (Top) Mu(-)", 'v': inputs['mu_L_n']},
+        {'key': "L_BOT", 't': "Left (Bot) Mu(+)", 'v': inputs['mu_L_p']},
+        {'key': "M_TOP", 't': "Mid (Top) Mu(-)", 'v': inputs['mu_M_n']},
+        {'key': "M_BOT", 't': "Mid (Bot) Mu(+)", 'v': inputs['mu_M_p']},
+        {'key': "R_TOP", 't': "Right (Top) Mu(-)", 'v': inputs['mu_R_n']},
+        {'key': "R_BOT", 't': "Right (Bot) Mu(+)", 'v': inputs['mu_R_p']}
+    ]
+
+    bar_counts = {}
+    flex_ok = True
+
+    for case in MuCases:
+        title = case['t']
+        Mu_tfm = case['v']
+        key = case['key']
+
+        if Mu_tfm <= 0.001:
+            bar_counts[key] = 2
+            continue
+
+        Mu_Nmm = Mu_tfm * 9806650.0
+
+        # Calculate As
+        As_req = solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d)
+
+        # Provide Bars
+        bar_area = BAR_INFO[barKey]['A_cm2'] * 100
+        n = math.ceil(As_req / bar_area)
+        if n < 2: n = 2
+        As_prov = n * bar_area
+
+        # Check Provided
+        rProv = flexureSectionResponse(As_prov, fc, fy, bw, d)
+        passStr = rProv['phiMn'] >= Mu_Nmm
+        passMax = As_req <= As_max + 1
+
+        # Clear Spacing
+        usable = bw - 2.0 * (cover + db_st)
+        clear = (usable - n * db_main) / (n - 1) if n > 1 else usable - db_main
+        req_clr = max(db_main, 25.0, 4.0 * agg_mm / 3.0)
