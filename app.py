@@ -1,15 +1,19 @@
 import streamlit as st
+import matplotlib
+
+# ใช้ Agg backend เพื่อป้องกัน Error เรื่อง GUI บน Server/Cloud
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
 import numpy as np
 
 # ==========================================
-# 1. DATABASE & CONFIG
+# 1. SETUP & CONFIGURATION
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
-# Rebar Database
+# Database เหล็กเสริม (อ้างอิงพื้นที่หน้าตัดตามมาตรฐาน)
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
     'RB9': {'A_cm2': 0.636, 'd_mm': 9},
@@ -23,6 +27,7 @@ BAR_INFO = {
 
 
 def fmt(n, digits=3):
+    """ฟังก์ชันจัดรูปแบบตัวเลขให้สวยงาม"""
     try:
         if n is None: return "-"
         val = float(n)
@@ -33,42 +38,49 @@ def fmt(n, digits=3):
 
 
 # ==========================================
-# 2. CALCULATION LOGIC (ACI 318-19)
+# 2. CALCULATION LOGIC (ACI 318-19 Metric)
 # ==========================================
 def beta1FromFc(fc_MPa):
+    """คำนวณค่า Beta1"""
     if fc_MPa <= 28: return 0.85
     b1 = 0.85 - 0.05 * ((fc_MPa - 28) / 7)
     return max(0.65, b1)
 
 
 def phiFlexureFromStrain(eps_t):
+    """คำนวณค่า Phi จาก Strain"""
     if eps_t <= 0.002: return 0.65
     if eps_t >= 0.005: return 0.90
     return 0.65 + (eps_t - 0.002) * (0.25 / 0.003)
 
 
 def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
+    """คำนวณกำลังรับโมเมนต์ดัด (Iterative Method)"""
     beta1 = beta1FromFc(fc)
     fs = fy
-    # Initial guess
+
+    # เริ่มต้นสมมติค่า a
     a = (As_mm2 * fs) / (0.85 * fc * bw) if fc > 0 else 0
     c = a / beta1 if beta1 > 0 else 0
 
-    # Iterate for equilibrium
+    # วนลูปหาจุดสมดุลแรง (Equilibrium)
     for i in range(50):
         if c <= 0.1: c = 0.1
         eps_t = eps_cu * (d - c) / c
+
+        # คำนวณ fs ใหม่ตาม Strain จริง
         fs_new = min(fy, Es * eps_t)
         fs_new = max(fs_new, -fy)
 
         a_new = (As_mm2 * fs_new) / (0.85 * fc * bw)
 
+        # เช็คว่าลู่เข้าหรือยัง
         if abs(fs_new - fs) < 0.1 and abs(a_new - a) < 0.1:
-            fs = fs_new;
-            a = a_new;
+            fs = fs_new
+            a = a_new
             break
-        fs = fs_new;
-        a = a_new;
+        fs = fs_new
+        a = a_new
         c = a / beta1
 
     c = a / beta1
@@ -79,21 +91,24 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
     Mn = T * (d - a / 2.0)
     phiMn = phi * Mn
 
-    return {'phi': phi, 'phiMn': phiMn}
+    return {'phi': phi, 'phiMn': phiMn, 'eps_t': eps_t}
 
 
 def solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d):
+    """Binary Search เพื่อหาปริมาณเหล็กที่ต้องการ (As Required)"""
     As_lo = As_min
     As_hi = As_lo
 
-    # Expand Hi
+    # 1. ขยายขอบเขตบน (Expand Hi)
     for _ in range(30):
         r = flexureSectionResponse(As_hi, fc, fy, bw, d)
         if r['phiMn'] >= Mu_Nmm: break
         As_hi *= 1.3
-        if As_hi > As_max: As_hi = As_max; break
+        if As_hi > As_max:
+            As_hi = As_max
+            break
 
-    # Binary Search
+    # 2. ค้นหาค่าละเอียด (Binary Search)
     As_req = As_hi
     for _ in range(50):
         As_mid = 0.5 * (As_lo + As_hi)
@@ -107,20 +122,23 @@ def solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d):
 
 
 def process_calculation(inputs):
+    """ฟังก์ชันหลักสำหรับคำนวณทั้งระบบ"""
     calc_rows = []
 
+    # Helper ในการสร้างแถวตาราง
     def sec(title):
         calc_rows.append(["SECTION", title, "", "", "", ""])
 
     def row(item, formula, subs, result, unit, status=""):
         calc_rows.append([item, formula, subs, result, unit, status])
 
-    # 1. Parse Inputs
+    # 1. ดึงค่า Input
     b_cm = inputs['b']
     h_cm = inputs['h']
     cover_cm = inputs['cover']
     agg_mm = inputs.get('agg', 20)
 
+    # แปลงหน่วย ksc -> MPa
     ksc_to_MPa = 0.0980665
     fc = inputs['fc'] * ksc_to_MPa
     fy = inputs['fy'] * ksc_to_MPa
@@ -134,13 +152,15 @@ def process_calculation(inputs):
     stirKey = inputs['stirrupBar']
     db_st = BAR_INFO[stirKey]['d_mm']
     db_main = BAR_INFO[barKey]['d_mm']
+
+    # Effective Depth (d)
     d = h - cover - db_st - db_main / 2.0
 
-    # 2. Parameters
+    # 2. ส่วน Header ข้อมูลวัสดุ
     sec("1. MATERIAL & SECTION PARAMETERS")
     beta1 = beta1FromFc(fc)
 
-    # As Min/Max
+    # As Min / As Max
     rho1 = 0.25 * math.sqrt(fc) / fy
     rho2 = 1.4 / fy
     As_min = max(rho1, rho2) * bw * d
@@ -155,48 +175,7 @@ def process_calculation(inputs):
     row("Section", "-", f"{fmt(bw, 0)} x {fmt(h, 0)} mm", "-", "mm")
     row("As,min", "max(0.25√fc'/fy, 1.4/fy)bd", "-", f"{fmt(As_min, 0)}", "mm²")
 
-    # 3. FLEXURE
+    # 3. ออกแบบรับแรงดัด (FLEXURE)
     sec("2. FLEXURE DESIGN")
 
-    # Define MuCases carefully to avoid line wrap issues
-    MuCases = [
-        {'key': "L_TOP", 't': "Left (Top) Mu(-)", 'v': inputs['mu_L_n']},
-        {'key': "L_BOT", 't': "Left (Bot) Mu(+)", 'v': inputs['mu_L_p']},
-        {'key': "M_TOP", 't': "Mid (Top) Mu(-)", 'v': inputs['mu_M_n']},
-        {'key': "M_BOT", 't': "Mid (Bot) Mu(+)", 'v': inputs['mu_M_p']},
-        {'key': "R_TOP", 't': "Right (Top) Mu(-)", 'v': inputs['mu_R_n']},
-        {'key': "R_BOT", 't': "Right (Bot) Mu(+)", 'v': inputs['mu_R_p']}
-    ]
-
-    bar_counts = {}
-    flex_ok = True
-
-    for case in MuCases:
-        title = case['t']
-        Mu_tfm = case['v']
-        key = case['key']
-
-        if Mu_tfm <= 0.001:
-            bar_counts[key] = 2
-            continue
-
-        Mu_Nmm = Mu_tfm * 9806650.0
-
-        # Calculate As
-        As_req = solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d)
-
-        # Provide Bars
-        bar_area = BAR_INFO[barKey]['A_cm2'] * 100
-        n = math.ceil(As_req / bar_area)
-        if n < 2: n = 2
-        As_prov = n * bar_area
-
-        # Check Provided
-        rProv = flexureSectionResponse(As_prov, fc, fy, bw, d)
-        passStr = rProv['phiMn'] >= Mu_Nmm
-        passMax = As_req <= As_max + 1
-
-        # Clear Spacing
-        usable = bw - 2.0 * (cover + db_st)
-        clear = (usable - n * db_main) / (n - 1) if n > 1 else usable - db_main
-        req_clr = max(db_main, 25.0, 4.0 * agg_mm / 3.0)
+    # รายการโมเมนต์ (เขียนแยกบรรทัดเพื่อป้องกัน Syntax Error)
