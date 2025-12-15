@@ -1,7 +1,7 @@
 import streamlit as st
 import matplotlib
 
-matplotlib.use('Agg')  # ใช้ Backend แบบไม่แสดงผลหน้าจอ
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
@@ -11,7 +11,7 @@ import requests
 from fpdf import FPDF
 
 # ==========================================
-# 1. DATABASE & CONFIG
+# 1. SETUP
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
@@ -38,7 +38,7 @@ def fmt(n, digits=3):
 
 
 # ==========================================
-# 2. CALCULATION LOGIC
+# 2. CALCULATION
 # ==========================================
 def beta1FromFc(fc_MPa):
     if fc_MPa <= 28: return 0.85
@@ -115,12 +115,10 @@ def process_calculation(inputs):
     h_cm = inputs['h']
     cover_cm = inputs['cover']
     agg_mm = inputs.get('agg', 20)
-
     ksc_to_MPa = 0.0980665
     fc = inputs['fc'] * ksc_to_MPa
     fy = inputs['fy'] * ksc_to_MPa
     fyt = inputs['fyt'] * ksc_to_MPa
-
     bw = b_cm * 10
     h = h_cm * 10
     cover = cover_cm * 10
@@ -131,7 +129,6 @@ def process_calculation(inputs):
     db_main = BAR_INFO[barKey]['d_mm']
     d = h - cover - db_st - db_main / 2.0
 
-    # Header
     sec("1. MATERIAL & SECTION PARAMETERS")
     beta1 = beta1FromFc(fc)
     rho1 = 0.25 * math.sqrt(fc) / fy
@@ -147,7 +144,6 @@ def process_calculation(inputs):
     row("Section", "-", f"{fmt(bw, 0)} x {fmt(h, 0)} mm", "-", "mm")
     row("As,min", "max(0.25√fc'/fy, 1.4/fy)bd", "-", f"{fmt(As_min, 0)}", "mm²")
 
-    # Flexure
     sec("2. FLEXURE DESIGN")
     MuCases = [
         {'key': "L_TOP", 't': "Left (Top) Mu(-)", 'v': inputs['mu_L_n']},
@@ -192,7 +188,6 @@ def process_calculation(inputs):
         row(f"{title}: Provide", f"Use {barKey}", f"{n}-{barKey}", "OK" if overall else "NO", "-")
         row(f"{title}: Check", "φMn ≥ Mu", f"{fmt(rProv['phiMn'] / 9.8e6, 3)}", "PASS" if passStr else "FAIL", "tf-m")
 
-    # Shear
     sec("3. SHEAR DESIGN")
     Vc_N = 0.17 * math.sqrt(fc) * bw * d
     phi_v = 0.75
@@ -243,14 +238,13 @@ def process_calculation(inputs):
 
 
 # ==========================================
-# 3. PDF & PLOTTING
+# 3. PDF GENERATOR (ROBUST)
 # ==========================================
 def check_font():
-    """ตรวจสอบฟอนต์และดาวน์โหลดถ้าจำเป็น"""
+    """Download font if missing"""
     font_name = "THSarabunNew.ttf"
     if not os.path.exists(font_name):
         try:
-            # ลิงก์ดาวน์โหลดฟอนต์ที่เสถียร
             url = "https://github.com/nutjunkie/thaifonts/raw/master/THSarabunNew.ttf"
             r = requests.get(url, allow_redirects=True, timeout=10)
             if r.status_code == 200:
@@ -263,79 +257,91 @@ def check_font():
 
 class PDF(FPDF):
     def header(self):
+        # Default header without Thai to be safe
         try:
             self.set_font('Arial', 'B', 16)
             self.cell(0, 10, 'ENGINEERING DESIGN REPORT', 0, 1, 'C')
-            self.set_font('Arial', '', 12)
-            self.cell(0, 5, 'Reinforced Concrete Beam Design (ACI 318-19)', 0, 1, 'C')
             self.ln(5)
         except:
             pass
 
 
-def create_pdf_bytes(inputs, rows, img_files):
-    font_path = check_font()
+def generate_pdf_file(inputs, rows, img_files, use_thai):
+    """
+    Core function to generate PDF.
+    If use_thai=True, attempts to use THSarabunNew.
+    If use_thai=False, strips non-latin chars.
+    """
     pdf = PDF()
 
-    # 1. เช็คว่ามีฟอนต์ไทยจริงหรือไม่
-    has_thai = False
-    if os.path.exists(font_path) and os.path.getsize(font_path) > 1000:
+    # 1. Setup Font
+    font_path = "THSarabunNew.ttf"
+    font_ready = False
+
+    if use_thai and os.path.exists(font_path):
         try:
             pdf.add_font('THSarabunNew', '', font_path, uni=True)
             pdf.add_font('THSarabunNew', 'B', font_path, uni=True)
-            has_thai = True
+            font_ready = True
         except:
-            pass
-
-    # ฟังก์ชันกรองข้อความ (Sanitize)
-    def clean(text):
-        if has_thai: return str(text)
-        # ถ้าไม่มีฟอนต์ไทย ให้ตัดตัวอักษรไทยออกเพื่อป้องกัน Error
-        return str(text).encode('latin-1', 'ignore').decode('latin-1')
+            font_ready = False
 
     pdf.add_page()
-    if has_thai:
+
+    # Helper to clean text
+    def txt(s):
+        s = str(s)
+        if font_ready: return s
+        # Strip non-latin if no font support
+        return s.encode('latin-1', 'ignore').decode('latin-1')
+
+    # Set Font
+    if font_ready:
         pdf.set_font('THSarabunNew', '', 14)
+        header_font = ('THSarabunNew', 'B', 14)
+        body_font = ('THSarabunNew', '', 12)
     else:
         pdf.set_font('Arial', '', 12)
+        header_font = ('Arial', 'B', 12)
+        body_font = ('Arial', '', 11)
 
-    # Info
-    pdf.cell(30, 8, clean("Project:"), 0)
-    pdf.cell(90, 8, clean(inputs['project']), 0)
-    pdf.cell(20, 8, clean("Date:"), 0)
+    # Info Box
+    pdf.cell(30, 8, txt("Project:"), 0)
+    pdf.cell(90, 8, txt(inputs['project']), 0)
+    pdf.cell(20, 8, txt("Date:"), 0)
     pdf.cell(0, 8, "15/12/2568", 0, 1)
 
-    pdf.cell(30, 8, clean("Engineer:"), 0)
-    pdf.cell(90, 8, clean(inputs['engineer']), 0)
-    pdf.cell(20, 8, clean("Code:"), 0)
+    pdf.cell(30, 8, txt("Engineer:"), 0)
+    pdf.cell(90, 8, txt(inputs['engineer']), 0)
+    pdf.cell(20, 8, txt("Code:"), 0)
     pdf.cell(0, 8, "ACI 318-19", 0, 1)
     pdf.ln(5)
 
-    # Box
+    # Material Box
     pdf.set_fill_color(240, 240, 240)
     pdf.rect(10, pdf.get_y(), 90, 35, 'F')
     pdf.rect(105, pdf.get_y(), 95, 35, 'F')
 
     pdf.set_xy(12, pdf.get_y() + 2)
-    if has_thai: pdf.set_font('THSarabunNew', 'B', 14)
-    pdf.cell(80, 8, clean("Materials"), "B", 2)
-    if has_thai: pdf.set_font('THSarabunNew', '', 12)
-    pdf.cell(80, 6, clean(f"Concrete (fc') = {inputs['fc']} ksc"), 0, 2)
-    pdf.cell(80, 6, clean(f"Main Steel (fy) = {inputs['fy']} ksc"), 0, 2)
-    pdf.cell(80, 6, clean(f"Stirrup (fyt) = {inputs['fyt']} ksc"), 0, 0)
+    pdf.set_font(*header_font)
+    pdf.cell(80, 8, txt("Materials"), "B", 2)
+    pdf.set_font(*body_font)
+    pdf.cell(80, 6, txt(f"Concrete (fc') = {inputs['fc']} ksc"), 0, 2)
+    pdf.cell(80, 6, txt(f"Main Steel (fy) = {inputs['fy']} ksc"), 0, 2)
+    pdf.cell(80, 6, txt(f"Stirrup (fyt) = {inputs['fyt']} ksc"), 0, 0)
 
     pdf.set_xy(107, pdf.get_y() - 22)
-    if has_thai: pdf.set_font('THSarabunNew', 'B', 14)
-    pdf.cell(80, 8, clean("Section"), "B", 2)
-    if has_thai: pdf.set_font('THSarabunNew', '', 12)
-    pdf.cell(80, 6, clean(f"Size = {inputs['b']} x {inputs['h']} cm"), 0, 2)
-    pdf.cell(80, 6, clean(f"Cover = {inputs['cover']} cm"), 0, 2)
-    pdf.cell(80, 6, clean(f"Aggregate = {inputs['agg']} mm"), 0, 0)
+    pdf.set_font(*header_font)
+    pdf.cell(80, 8, txt("Section"), "B", 2)
+    pdf.set_font(*body_font)
+    pdf.cell(80, 6, txt(f"Size = {inputs['b']} x {inputs['h']} cm"), 0, 2)
+    pdf.cell(80, 6, txt(f"Cover = {inputs['cover']} cm"), 0, 2)
+    pdf.cell(80, 6, txt(f"Aggregate = {inputs['agg']} mm"), 0, 0)
     pdf.ln(15)
 
-    # Images
-    if has_thai: pdf.set_font('THSarabunNew', 'B', 14)
-    pdf.cell(0, 10, clean("Design Summary"), 0, 1)
+    # Summary
+    pdf.set_font(*header_font)
+    pdf.cell(0, 10, txt("Design Summary"), 0, 1)
     y_start = pdf.get_y()
     w_img = 60
     if len(img_files) >= 3:
@@ -349,38 +355,42 @@ def create_pdf_bytes(inputs, rows, img_files):
 
     # Table
     pdf.add_page()
-    pdf.cell(0, 10, clean("Calculation Details"), 0, 1)
+    pdf.cell(0, 10, txt("Calculation Details"), 0, 1)
+
     pdf.set_fill_color(200, 200, 200)
-    if has_thai: pdf.set_font('THSarabunNew', 'B', 12)
+    pdf.set_font(*header_font)
     cols = [40, 50, 45, 30, 25]
     headers = ["Item", "Formula", "Substitution", "Result", "Unit"]
     for i, h in enumerate(headers):
-        pdf.cell(cols[i], 8, clean(h), 1, 0, 'C', True)
+        pdf.cell(cols[i], 8, txt(h), 1, 0, 'C', True)
     pdf.ln()
 
-    if has_thai: pdf.set_font('THSarabunNew', '', 11)
+    pdf.set_font(*body_font)
     for r in rows:
         if r[0] == "SECTION":
             pdf.set_fill_color(230, 230, 230)
-            pdf.cell(sum(cols), 7, clean(str(r[1])), 1, 1, 'L', True)
+            pdf.cell(sum(cols), 7, txt(r[1]), 1, 1, 'L', True)
         else:
-            pdf.cell(cols[0], 7, clean(str(r[0])), 1)
-            pdf.cell(cols[1], 7, clean(str(r[1])), 1)
-            pdf.cell(cols[2], 7, clean(str(r[2])), 1)
-            pdf.cell(cols[3], 7, clean(str(r[3])), 1)
-            pdf.cell(cols[4], 7, clean(str(r[4])), 1, 1)
+            pdf.cell(cols[0], 7, txt(r[0]), 1)
+            pdf.cell(cols[1], 7, txt(r[1]), 1)
+            pdf.cell(cols[2], 7, txt(r[2]), 1)
+            pdf.cell(cols[3], 7, txt(r[3]), 1)
+            pdf.cell(cols[4], 7, txt(r[4]), 1, 1)
 
-    # Binary Write
-    temp_name = "report.pdf"
-    pdf.output(temp_name)
-    with open(temp_name, "rb") as f:
-        pdf_bytes = f.read()
+    # Return binary
+    return pdf.output(dest='S').encode('latin-1')
+
+
+def create_safe_pdf(inputs, rows, img_files):
+    """
+    Try creating PDF with Thai. If fails, fallback to English only.
+    """
+    check_font()  # Ensure font is downloaded
     try:
-        os.remove(temp_name)
-    except:
-        pass
-
-    return pdf_bytes
+        return generate_pdf_file(inputs, rows, img_files, use_thai=True)
+    except Exception:
+        # Fallback: Strip Thai characters to avoid crash
+        return generate_pdf_file(inputs, rows, img_files, use_thai=False)
 
 
 def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, bar_name):
@@ -520,7 +530,10 @@ if run_btn:
             plt.close(fig3)
 
         st.write("---")
-        pdf_bytes = create_pdf_bytes(inputs, rows, img_files)
+
+        # *** SAFE PDF GENERATION ***
+        pdf_bytes = create_safe_pdf(inputs, rows, img_files)
+
         st.download_button(
             label="🖨️ Print / Download Report (PDF)",
             data=pdf_bytes,
