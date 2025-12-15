@@ -477,7 +477,7 @@ def generate_full_html_report(inputs, rows, img_b64_list):
             <img src="{img_b64_list[2]}" />
         </div>
 
-        <br><br><br><br><br><br><br><br><br><br><br><br><br>
+        <br><br><br><br><br><br><br><br><br><br><br><br><br><br><br>
 
         <h3>Calculation Details</h3>
         <table>
