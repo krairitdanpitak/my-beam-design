@@ -75,7 +75,7 @@ def fmt(n, digits=3):
 
 
 # ==========================================
-# 3. CALCULATION LOGIC (DETAILED)
+# 3. CALCULATION LOGIC
 # ==========================================
 def beta1FromFc(fc_MPa):
     if fc_MPa <= 28: return 0.85
@@ -147,7 +147,6 @@ def process_calculation(inputs):
     def row(item, formula, subs, result, unit, status=""):
         rows.append([item, formula, subs, result, unit, status])
 
-    # Inputs
     b_cm = inputs['b'];
     h_cm = inputs['h'];
     cover_cm = inputs['cover']
@@ -168,10 +167,9 @@ def process_calculation(inputs):
     stirKey = inputs['stirrupBar']
     db_main = BAR_INFO[barKey]['d_mm']
     db_st = BAR_INFO[stirKey]['d_mm']
-
     d = h - cover - db_st - (db_main / 2.0)
 
-    # --- 1. MATERIALS ---
+    # 1. MATERIALS
     sec("1. MATERIAL & SECTION PARAMETERS")
     row("Concrete & Steel", "fc', fy, fyt", f"fc'={fmt(fc_MPa, 2)} MPa, fy={fmt(fy_MPa, 0)} MPa", "-", "-")
     row("Section (b x h)", "-", f"{fmt(bw, 0)} x {fmt(h, 0)}", "-", "mm")
@@ -194,7 +192,7 @@ def process_calculation(inputs):
     rho_bal = 0.85 * beta1 * (fc_MPa / fy_MPa) * (eps_cu / (eps_cu + eps_y))
     As_max = 0.75 * rho_bal * bw * d
 
-    # --- 2. FLEXURE ---
+    # 2. FLEXURE
     sec("2. FLEXURE DESIGN")
     MuCases = [
         {'key': "L_TOP", 't': "Left (Top) Mu(-)", 'v': inputs['mu_L_n']},
@@ -246,7 +244,7 @@ def process_calculation(inputs):
         row(f"{title}: Clear Spacing", "s_clr ≥ max(db, 25, 4/3 agg)", f"{fmt(clear_spacing, 1)} ≥ {fmt(req_clr, 1)}",
             status_clr, "mm", status_clr)
 
-    # --- 3. SHEAR ---
+    # 3. SHEAR
     sec("3. SHEAR DESIGN")
     Vc_N = 0.17 * math.sqrt(fc_MPa) * bw * d
     Vc_tf = Vc_N / 9806.65
@@ -394,7 +392,6 @@ def generate_full_html_report(inputs, rows, img_b64_list):
             h1, h3 {{ text-align: center; margin: 5px; }}
             .header {{ position: relative; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }}
 
-            /* BEAM BOX (TOP RIGHT) */
             .beam-box {{
                 position: absolute;
                 top: 0;
@@ -419,7 +416,6 @@ def generate_full_html_report(inputs, rows, img_b64_list):
             .pass-no {{ color: red; font-weight: bold; text-align: center; }}
             .load-value {{ color: #D32F2F !important; font-weight: bold; }}
 
-            /* FOOTER / SIGNATURE SECTION (BOTTOM LEFT) */
             .footer-section {{
                 margin-top: 50px;
                 page-break-inside: avoid;
@@ -479,6 +475,8 @@ def generate_full_html_report(inputs, rows, img_b64_list):
             <img src="{img_b64_list[1]}" />
             <img src="{img_b64_list[2]}" />
         </div>
+
+        <br><br>
 
         <h3>Calculation Details</h3>
         <table>
