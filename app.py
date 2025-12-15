@@ -15,7 +15,19 @@ import streamlit.components.v1 as components
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
-# Database เหล็กเสริม
+# CSS สำหรับจัดหน้า (เผื่อกรณีต้องการดูในหน้าเว็บด้วย)
+st.markdown("""
+<style>
+    .report-table {width: 100%; border-collapse: collapse; font-family: sans-serif; margin-bottom: 20px;}
+    .report-table th, .report-table td {border: 1px solid #444; padding: 8px; font-size: 14px;}
+    .report-table th {background-color: #f2f2f2; text-align: left; font-weight: bold;}
+
+    .pass-ok {color: green; font-weight: bold;}
+    .pass-no {color: red; font-weight: bold;}
+    .sec-row {background-color: #e0e0e0; font-weight: bold; font-size: 15px;}
+</style>
+""", unsafe_allow_html=True)
+
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
     'RB9': {'A_cm2': 0.636, 'd_mm': 9},
@@ -57,7 +69,6 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
     fs = fy
     a = (As_mm2 * fs) / (0.85 * fc * bw) if fc > 0 else 0
     c = a / beta1 if beta1 > 0 else 0
-
     for i in range(50):
         if c <= 0.1: c = 0.1
         eps_t = eps_cu * (d - c) / c
@@ -71,7 +82,6 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
         fs = fs_new;
         a = a_new;
         c = a / beta1
-
     c = a / beta1
     eps_t = eps_cu * (d - c) / c if c > 0 else 0.005
     phi = phiFlexureFromStrain(eps_t)
@@ -89,7 +99,6 @@ def solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d):
         if r['phiMn'] >= Mu_Nmm: break
         As_hi *= 1.3
         if As_hi > As_max: As_hi = As_max; break
-
     for _ in range(50):
         As_mid = 0.5 * (As_lo + As_hi)
         r = flexureSectionResponse(As_mid, fc, fy, bw, d)
@@ -142,7 +151,6 @@ def process_calculation(inputs):
         {'key': "R_TOP", 't': "Right (Top)", 'v': inputs['mu_R_n']},
         {'key': "R_BOT", 't': "Right (Bot)", 'v': inputs['mu_R_p']}
     ]
-
     bar_counts = {}
     flex_ok = True
     beta1 = beta1FromFc(fc)
@@ -159,28 +167,22 @@ def process_calculation(inputs):
         if Mu_tfm <= 0.001:
             bar_counts[key] = 2
             continue
-
         Mu_Nmm = Mu_tfm * 9806650.0
         As_req = solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d)
-
         bar_area = BAR_INFO[barKey]['A_cm2'] * 100
         n = math.ceil(As_req / bar_area)
         if n < 2: n = 2
         As_prov = n * bar_area
-
         rProv = flexureSectionResponse(As_prov, fc, fy, bw, d)
         passStr = rProv['phiMn'] >= Mu_Nmm
         passMax = As_req <= As_max + 1
-
         usable = bw - 2.0 * (cover + db_st)
         clear = (usable - n * db_main) / (n - 1) if n > 1 else usable - db_main
         req_clr = max(db_main, 25.0, 4.0 * agg_mm / 3.0)
         passClr = clear >= req_clr - 1
-
         overall = passStr and passMax and passClr
         if not overall: flex_ok = False
         bar_counts[key] = n
-
         row(f"{title} Mu", "-", "-", f"{fmt(Mu_tfm, 3)}", "tf-m", "")
         row(f"{title} Prov", f"Use {barKey}", f"{n}-{barKey}", "OK" if overall else "NO", "-", "OK")
         row(f"{title} Check", "φMn ≥ Mu", f"{fmt(rProv['phiMn'] / 9.8e6, 3)}", "PASS" if passStr else "FAIL", "tf-m",
@@ -238,15 +240,13 @@ def process_calculation(inputs):
 
 
 # ==========================================
-# 3. PLOTTING & HELPERS
+# 3. GRAPHICS & REPORT GENERATOR
 # ==========================================
 def fig_to_base64(fig):
-    """Convert Matplotlib figure to Base64 string for HTML embedding"""
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight')
     buf.seek(0)
-    img_str = base64.b64encode(buf.read()).decode()
-    return f"data:image/png;base64,{img_str}"
+    return f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"
 
 
 def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, bar_name):
@@ -286,37 +286,24 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
     return fig
 
 
-# ==========================================
-# 4. HTML REPORT GENERATOR (THE FIX)
-# ==========================================
 def generate_html_report(inputs, rows, img_b64_list):
     """สร้าง HTML Template สำหรับพิมพ์"""
-
-    # สร้างตาราง HTML
     table_rows = ""
     for r in rows:
         if r[0] == "SECTION":
             table_rows += f"<tr class='sec-row'><td colspan='6'>{r[1]}</td></tr>"
         else:
             status_cls = "pass-ok" if "OK" in r[5] or "PASS" in r[5] else "pass-no"
-            table_rows += f"""
-                <tr>
-                    <td>{r[0]}</td>
-                    <td>{r[1]}</td>
-                    <td>{r[2]}</td>
-                    <td>{r[3]}</td>
-                    <td>{r[4]}</td>
-                    <td class='{status_cls}'>{r[5]}</td>
-                </tr>
-            """
+            table_rows += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td><td class='{status_cls}'>{r[5]}</td></tr>"
 
     html = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <title>Engineering Report</title>
+        <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
         <style>
-            body {{ font-family: sans-serif; padding: 20px; }}
+            body {{ font-family: 'Sarabun', sans-serif; padding: 20px; }}
             h1, h3 {{ text-align: center; margin: 5px; }}
             .header {{ margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }}
             .info-box {{ display: flex; justify-content: space-between; margin-bottom: 20px; }}
@@ -340,7 +327,6 @@ def generate_html_report(inputs, rows, img_b64_list):
             <h1>ENGINEERING DESIGN REPORT</h1>
             <h3>Reinforced Concrete Beam Design (ACI 318-19)</h3>
         </div>
-
         <div class="info-box">
             <div>
                 <strong>Project:</strong> {inputs['project']}<br>
@@ -351,7 +337,6 @@ def generate_html_report(inputs, rows, img_b64_list):
                 <strong>Code:</strong> ACI 318-19
             </div>
         </div>
-
         <div class="info-box">
             <div class="box">
                 <strong>Materials:</strong><br>
@@ -366,14 +351,12 @@ def generate_html_report(inputs, rows, img_b64_list):
                 Agg = {inputs['agg']} mm
             </div>
         </div>
-
         <h3>Design Summary</h3>
         <div class="images">
             <img src="{img_b64_list[0]}" />
             <img src="{img_b64_list[1]}" />
             <img src="{img_b64_list[2]}" />
         </div>
-
         <h3>Calculation Details</h3>
         <table>
             <thead>
@@ -390,11 +373,6 @@ def generate_html_report(inputs, rows, img_b64_list):
                 {table_rows}
             </tbody>
         </table>
-
-        <script>
-            // Auto print when opened
-            // window.print(); 
-        </script>
     </body>
     </html>
     """
@@ -434,21 +412,21 @@ with st.sidebar.form("inputs"):
     st.header("3. Loads")
     st.markdown("**Left Support (tf-m, tf)**")
     c1, c2 = st.columns(2)
-    mu_L_n = c1.number_input("Mu- Top (tf-m)", value=8.0, key='mln')
-    mu_L_p = c2.number_input("Mu+ Bot (tf-m)", value=4.0, key='mlp')
-    vu_L = st.number_input("Vu Left (tf)", value=12.0)
+    mu_L_n = c1.number_input("Mu- Top (Left)", value=8.0)
+    mu_L_p = c2.number_input("Mu+ Bot (Left)", value=4.0)
+    vu_L = st.number_input("Vu Left", value=12.0)
 
     st.markdown("**Mid Span (tf-m, tf)**")
     c1, c2 = st.columns(2)
-    mu_M_n = c1.number_input("Mu- Top (tf-m)", value=0.0, key='mmn')
-    mu_M_p = c2.number_input("Mu+ Bot (tf-m)", value=8.0, key='mmp')
-    vu_M = st.number_input("Vu Mid (tf)", value=8.0)
+    mu_M_n = c1.number_input("Mu- Top (Mid)", value=0.0)
+    mu_M_p = c2.number_input("Mu+ Bot (Mid)", value=8.0)
+    vu_M = st.number_input("Vu Mid", value=8.0)
 
     st.markdown("**Right Support (tf-m, tf)**")
     c1, c2 = st.columns(2)
-    mu_R_n = c1.number_input("Mu- Top (tf-m)", value=8.0, key='mrn')
-    mu_R_p = c2.number_input("Mu+ Bot (tf-m)", value=4.0, key='mrp')
-    vu_R = st.number_input("Vu Right (tf)", value=12.0)
+    mu_R_n = c1.number_input("Mu- Top (Right)", value=8.0)
+    mu_R_p = c2.number_input("Mu+ Bot (Right)", value=4.0)
+    vu_R = st.number_input("Vu Right", value=12.0)
 
     run_btn = st.form_submit_button("Run Calculation")
 
@@ -463,41 +441,50 @@ if run_btn:
         'mu_R_n': mu_R_n, 'mu_R_p': mu_R_p,
         'vu_L': vu_L, 'vu_M': vu_M, 'vu_R': vu_R
     }
-
-    # 1. Calculation
     rows, bars, shears = process_calculation(inputs)
+    st.session_state['data'] = inputs
+    st.session_state['rows'] = rows
+    st.session_state['bars'] = bars
+    st.session_state['shears'] = shears
+    st.session_state['calc_done'] = True
 
-    # 2. Generate Images
-    m_db = BAR_INFO[inputs['mainBar']]['d_mm']
-    s_db = BAR_INFO[inputs['stirrupBar']]['d_mm']
+if st.session_state['calc_done']:
+    data = st.session_state['data']
+    rows = st.session_state['rows']
+    bars = st.session_state['bars']
+    shears = st.session_state['shears']
 
-    fig1 = create_beam_section(inputs['b'], inputs['h'], inputs['cover'], bars.get('L_TOP', 2), bars.get('L_BOT', 2),
-                               f"@{shears['V_L'] / 10:.0f}cm", m_db, s_db, "Left Support", inputs['mainBar'])
+    m_db = BAR_INFO[data['mainBar']]['d_mm']
+    s_db = BAR_INFO[data['stirrupBar']]['d_mm']
+
+    fig1 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('L_TOP', 2), bars.get('L_BOT', 2),
+                               f"@{shears['V_L'] / 10:.0f}cm", m_db, s_db, "Left Support", data['mainBar'])
     img1 = fig_to_base64(fig1)
 
-    fig2 = create_beam_section(inputs['b'], inputs['h'], inputs['cover'], bars.get('M_TOP', 2), bars.get('M_BOT', 2),
-                               f"@{shears['V_M'] / 10:.0f}cm", m_db, s_db, "Mid Span", inputs['mainBar'])
+    fig2 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('M_TOP', 2), bars.get('M_BOT', 2),
+                               f"@{shears['V_M'] / 10:.0f}cm", m_db, s_db, "Mid Span", data['mainBar'])
     img2 = fig_to_base64(fig2)
 
-    fig3 = create_beam_section(inputs['b'], inputs['h'], inputs['cover'], bars.get('R_TOP', 2), bars.get('R_BOT', 2),
-                               f"@{shears['V_R'] / 10:.0f}cm", m_db, s_db, "Right Support", inputs['mainBar'])
+    fig3 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('R_TOP', 2), bars.get('R_BOT', 2),
+                               f"@{shears['V_R'] / 10:.0f}cm", m_db, s_db, "Right Support", data['mainBar'])
     img3 = fig_to_base64(fig3)
 
-    # 3. Generate HTML
-    html_report = generate_html_report(inputs, rows, [img1, img2, img3])
+    html_report = generate_html_report(data, rows, [img1, img2, img3])
 
-    # 4. Display Result
-    st.success("✅ คำนวณเสร็จสิ้น")
+    # *** FIXED: BASE64 ENCODING FOR JS ***
+    b64_html = base64.b64encode(html_report.encode('utf-8')).decode('utf-8')
 
-    # --- POPUP PRINT BUTTON ---
-    # ใช้ Javascript เพื่อเปิดหน้าต่างใหม่และสั่งพิมพ์
+    # JavaScript to open window -> write decoded HTML -> Print
     js_code = f"""
         <script>
             function openPrintWindow() {{
-                var printWindow = window.open('', '', 'width=800,height=600');
-                printWindow.document.write(`{html_report}`);
+                var printWindow = window.open('', '_blank', 'width=1000,height=800');
+                var content = decodeURIComponent(escape(window.atob('{b64_html}')));
+                printWindow.document.write(content);
                 printWindow.document.close();
-                setTimeout(function(){{ printWindow.print(); }}, 500);
+                setTimeout(function() {{
+                    printWindow.print();
+                }}, 500);
             }}
         </script>
         <div style="text-align: center; margin: 20px;">
@@ -505,15 +492,16 @@ if run_btn:
                 background-color: #4CAF50; color: white; padding: 15px 32px; 
                 text-align: center; text-decoration: none; display: inline-block; 
                 font-size: 18px; border: none; border-radius: 8px; cursor: pointer;
-                box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2);">
-                🖨️ เปิดหน้ารายงานสำหรับพิมพ์ (Print Report)
+                box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2); font-family: sans-serif; font-weight: bold;">
+                🖨️ เปิดหน้ารายงานสำหรับพิมพ์ (Open Print Report)
             </button>
         </div>
     """
+
+    st.success("✅ คำนวณเสร็จสิ้น! กดปุ่มด้านล่างเพื่อพิมพ์รายงาน")
     components.html(js_code, height=100)
 
-    # Show Preview
-    st.markdown("### ตัวอย่างรายงาน (Preview)")
+    st.markdown("### Preview (ตัวอย่างรายงาน)")
     st.components.v1.html(html_report, height=600, scrolling=True)
 
 else:
