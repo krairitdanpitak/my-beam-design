@@ -47,7 +47,7 @@ st.markdown("""
     .pass-no {color: red; font-weight: bold;}
     .sec-row {background-color: #e0e0e0; font-weight: bold; font-size: 15px;}
 
-    /* สไตล์สำหรับตัวเลข Load (สีแดง) */
+    /* ตัวเลข Load สีแดง */
     .load-value {color: #D32F2F !important; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
@@ -208,11 +208,8 @@ def process_calculation(inputs):
         if not overall: flex_ok = False
         bar_counts[key] = n
 
-        # Row Mu (Load Input -> Will be Red)
         row(f"{title} Mu", "-", "-", f"{fmt(Mu_tfm, 3)}", "tf-m", "")
-        # Row Provide
         row(f"{title} Prov", f"Use {barKey}", f"{n}-{barKey}", "OK" if overall else "NO", "-", "OK")
-        # Row Check
         row(f"{title} Check", "φMn ≥ Mu", f"{fmt(rProv['phiMn'] / 9.8e6, 3)}", "PASS" if passStr else "FAIL", "tf-m",
             "PASS")
 
@@ -255,7 +252,6 @@ def process_calculation(inputs):
         if not passStr: shear_ok = False
         shear_res[case['key']] = s_sel
 
-        # Row Vu (Load Input -> Will be Red)
         row(f"{loc} Vu", "-", "-", f"{fmt(Vu_tf, 3)}", "tf", "")
         status_shear = "OK" if passStr else "NO"
         row(f"{loc} Provide", f"min(req, {fmt(s_avmin, 0)})", "-", f"{stirKey}@{fmt(s_sel / 10, 0)}cm", "-",
@@ -322,9 +318,9 @@ def generate_full_html_report(inputs, rows, img_b64_list):
         else:
             status_cls = "pass-ok" if "OK" in r[5] or "PASS" in r[5] else "pass-no"
 
-            # เช็คว่าเป็นแถว Load Input หรือไม่ (Mu หรือ Vu)
-            # ถ้าเป็น Input Load -> ให้ใช้ class 'load-value' (สีแดง ตัวหนา)
+            # --- COLOR RED FOR INPUT LOADS ---
             val_cls = ""
+            # Check if it's a Load Input Row (Mu or Vu with '-')
             if r[1] == "-" and ("Mu" in str(r[0]) or "Vu" in str(r[0])):
                 val_cls = "load-value"
 
@@ -360,8 +356,6 @@ def generate_full_html_report(inputs, rows, img_b64_list):
             .sec-row {{ background-color: #ddd; font-weight: bold; }}
             .pass-ok {{ color: green; font-weight: bold; text-align: center; }}
             .pass-no {{ color: red; font-weight: bold; text-align: center; }}
-
-            /* CSS for Red Loads */
             .load-value {{ color: #D32F2F !important; font-weight: bold; }}
 
             @media print {{
@@ -446,42 +440,43 @@ with st.sidebar.form("inputs"):
 
     st.header("1. Parameters")
     c1, c2, c3 = st.columns(3)
-    fc = c1.number_input("fc' (ksc)", value=240)
-    fy = c2.number_input("fy (ksc)", value=4000)
-    fyt = c3.number_input("fyt (ksc)", value=2400)
+    # เพิ่ม key เพื่อป้องกัน Duplicate ID
+    fc = c1.number_input("fc' (ksc)", value=240, key="fc_in")
+    fy = c2.number_input("fy (ksc)", value=4000, key="fy_in")
+    fyt = c3.number_input("fyt (ksc)", value=2400, key="fyt_in")
 
     c1, c2 = st.columns(2)
-    mainBarKey = c1.selectbox("Main Bar", list(BAR_INFO.keys()), index=4)
-    stirrupBarKey = c2.selectbox("Stirrup", list(BAR_INFO.keys()), index=0)
+    mainBarKey = c1.selectbox("Main Bar", list(BAR_INFO.keys()), index=4, key="main_bar_in")
+    stirrupBarKey = c2.selectbox("Stirrup", list(BAR_INFO.keys()), index=0, key="stir_bar_in")
 
     st.header("2. Geometry")
     c1, c2, c3 = st.columns(3)
-    b = c1.number_input("b (cm)", value=25)
-    h = c2.number_input("h (cm)", value=50)
-    cover = c3.number_input("cover (cm)", value=3.0)
-    agg = st.number_input("Agg (mm)", value=20)
+    b = c1.number_input("b (cm)", value=25, key="b_in")
+    h = c2.number_input("h (cm)", value=50, key="h_in")
+    cover = c3.number_input("cover (cm)", value=3.0, key="c_in")
+    agg = st.number_input("Agg (mm)", value=20, key="agg_in")
 
-    # -----------------------------------------------
-    # Added Units to Headers as requested
-    # -----------------------------------------------
-    st.header("3. Loads (Design Forces)")
+    # ----------------------------------------
+    # FIXED: Added Units and Unique Keys
+    # ----------------------------------------
+    st.header("3. Loads")
     st.markdown("**Left Support (Mu: tf-m, Vu: tf)**")
     c1, c2 = st.columns(2)
-    mu_L_n = c1.number_input("Mu- Top (tf-m)", value=8.0)
-    mu_L_p = c2.number_input("Mu+ Bot (tf-m)", value=4.0)
-    vu_L = st.number_input("Vu Left (tf)", value=12.0)
+    mu_L_n = c1.number_input("Mu- Top (Left)", value=8.0, key="L_mu_top")
+    mu_L_p = c2.number_input("Mu+ Bot (Left)", value=4.0, key="L_mu_bot")
+    vu_L = st.number_input("Vu Left", value=12.0, key="L_vu")
 
     st.markdown("**Mid Span (Mu: tf-m, Vu: tf)**")
     c1, c2 = st.columns(2)
-    mu_M_n = c1.number_input("Mu- Top (tf-m)", value=0.0)
-    mu_M_p = c2.number_input("Mu+ Bot (tf-m)", value=8.0)
-    vu_M = st.number_input("Vu Mid (tf)", value=8.0)
+    mu_M_n = c1.number_input("Mu- Top (Mid)", value=0.0, key="M_mu_top")
+    mu_M_p = c2.number_input("Mu+ Bot (Mid)", value=8.0, key="M_mu_bot")
+    vu_M = st.number_input("Vu Mid", value=8.0, key="M_vu")
 
     st.markdown("**Right Support (Mu: tf-m, Vu: tf)**")
     c1, c2 = st.columns(2)
-    mu_R_n = c1.number_input("Mu- Top (tf-m)", value=8.0)
-    mu_R_p = c2.number_input("Mu+ Bot (tf-m)", value=4.0)
-    vu_R = st.number_input("Vu Right (tf)", value=12.0)
+    mu_R_n = c1.number_input("Mu- Top (Right)", value=8.0, key="R_mu_top")
+    mu_R_p = c2.number_input("Mu+ Bot (Right)", value=4.0, key="R_mu_bot")
+    vu_R = st.number_input("Vu Right", value=12.0, key="R_vu")
 
     run_btn = st.form_submit_button("Run Calculation")
 
