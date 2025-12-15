@@ -15,34 +15,8 @@ import streamlit.components.v1 as components
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
-# CSS สำหรับปุ่มพิมพ์และตาราง
 st.markdown("""
 <style>
-    .print-btn-container {
-        display: flex; 
-        justify-content: center; 
-        margin: 20px 0;
-    }
-    .print-link {
-        background-color: #008CBA;
-        border: none;
-        color: white !important;
-        padding: 15px 32px;
-        text-align: center;
-        text-decoration: none;
-        display: inline-block;
-        font-size: 18px;
-        border-radius: 8px;
-        font-family: sans-serif;
-        font-weight: bold;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        transition: all 0.3s;
-    }
-    .print-link:hover {
-        background-color: #007B9E;
-        box-shadow: 0 6px 8px rgba(0,0,0,0.2);
-        transform: translateY(-2px);
-    }
     .report-table {width: 100%; border-collapse: collapse; font-family: sans-serif;}
     .report-table th, .report-table td {border: 1px solid #ddd; padding: 8px; font-size: 14px;}
     .report-table th {background-color: #f2f2f2; text-align: left; font-weight: bold;}
@@ -262,7 +236,7 @@ def process_calculation(inputs):
 
 
 # ==========================================
-# 4. PLOTTING & REPORT GENERATOR
+# 4. PLOTTING & HTML GENERATOR
 # ==========================================
 def fig_to_base64(fig):
     buf = io.BytesIO()
@@ -308,8 +282,9 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
     return fig
 
 
-def generate_full_html_report(inputs, rows, img_b64_list, auto_print=False):
-    """สร้าง HTML Template"""
+def generate_full_html_report(inputs, rows, img_b64_list):
+    """สร้าง HTML Template พร้อมปุ่มกดในตัว (ไม่ Auto-Popup)"""
+
     table_rows = ""
     for r in rows:
         if r[0] == "SECTION":
@@ -326,18 +301,6 @@ def generate_full_html_report(inputs, rows, img_b64_list, auto_print=False):
                 <td class='{status_cls}'>{r[5]}</td>
             </tr>
             """
-
-    # ส่วนนี้สำคัญ: ถ้า auto_print=True (กดปุ่ม) ถึงจะใส่คำสั่งพิมพ์
-    # ถ้าเป็น Preview (auto_print=False) จะไม่ใส่คำสั่งพิมพ์
-    print_script = ""
-    if auto_print:
-        print_script = """
-        <script>
-            window.onload = function() {
-                setTimeout(function(){ window.print(); }, 500);
-            }
-        </script>
-        """
 
     html_content = f"""
     <!DOCTYPE html>
@@ -366,10 +329,12 @@ def generate_full_html_report(inputs, rows, img_b64_list, auto_print=False):
                 body {{ padding: 0; }}
             }}
             .print-btn-internal {{
-                background-color: #4CAF50; color: white; padding: 10px 20px;
+                background-color: #4CAF50; color: white; padding: 12px 24px;
                 border: none; border-radius: 5px; cursor: pointer; font-size: 16px;
-                margin-bottom: 20px;
+                margin-bottom: 20px; font-weight: bold; font-family: 'Sarabun', sans-serif;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             }}
+            .print-btn-internal:hover {{ background-color: #45a049; }}
         </style>
     </head>
     <body>
@@ -417,8 +382,6 @@ def generate_full_html_report(inputs, rows, img_b64_list, auto_print=False):
                 {table_rows}
             </tbody>
         </table>
-
-        {print_script}
     </body>
     </html>
     """
@@ -484,7 +447,6 @@ if run_btn:
         'mu_R_n': mu_R_n, 'mu_R_p': mu_R_p,
         'vu_L': vu_L, 'vu_M': vu_M, 'vu_R': vu_R
     }
-
     rows, bars, shears = process_calculation(inputs)
     st.session_state['data'] = inputs
     st.session_state['rows'] = rows
@@ -513,34 +475,15 @@ if st.session_state['calc_done']:
                                f"@{shears['V_R'] / 10:.0f}cm", m_db, s_db, "Right Support", data['mainBar'])
     img3_b64 = fig_to_base64(fig3)
 
-    # 2. สร้าง HTML 2 แบบ
-    # แบบ A: สำหรับแสดงผลหน้าจอ (Preview) -> ไม่สั่งพิมพ์อัตโนมัติ
-    html_preview = generate_full_html_report(data, rows, [img1_b64, img2_b64, img3_b64], auto_print=False)
-
-    # แบบ B: สำหรับปุ่มพิมพ์ (Link) -> สั่งพิมพ์อัตโนมัติเมื่อเปิด
-    html_link = generate_full_html_report(data, rows, [img1_b64, img2_b64, img3_b64], auto_print=True)
-
-    # Encode Link
-    b64_html = base64.b64encode(html_link.encode('utf-8')).decode('utf-8')
-    href = f'data:text/html;charset=utf-8;base64,{b64_html}'
+    # 2. GENERATE HTML REPORT
+    html_report = generate_full_html_report(data, rows, [img1_b64, img2_b64, img3_b64])
 
     # 3. DISPLAY
-    st.markdown("### ✅ คำนวณเสร็จสิ้น (Calculation Finished)")
+    st.markdown("### ✅ คำนวณเสร็จสิ้น")
 
-    # ปุ่มพิมพ์แบบ Link (เปิด Tab ใหม่)
-    st.markdown(f"""
-        <div class="print-btn-container">
-            <a href="{href}" target="_blank" class="print-link">
-                🖨️ เปิดหน้ารายงานเพื่อพิมพ์ (Open Print Report)
-            </a>
-        </div>
-    """, unsafe_allow_html=True)
-
-    st.write("---")
-
-    # แสดง Preview (ไม่มี auto-print)
-    st.subheader("Preview (ตัวอย่างรายงาน)")
-    st.components.v1.html(html_preview, height=600, scrolling=True)
+    # แสดง Preview (iframe)
+    st.subheader("ตัวอย่างรายงาน (Preview)")
+    st.components.v1.html(html_report, height=800, scrolling=True)
 
 else:
     st.info("👈 กรุณากรอกข้อมูลทางด้านซ้าย แล้วกดปุ่ม 'Run Calculation'")
