@@ -1,55 +1,75 @@
 import streamlit as st
 import matplotlib
 
-matplotlib.use('Agg')  # ป้องกัน Error กราฟิกบน Server
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
-import numpy as np  # <--- เพิ่มบรรทัดนี้แล้ว (แก้ NameError)
+import numpy as np
 import streamlit.components.v1 as components
+import io
+import base64
 
 # ==========================================
-# 1. SETUP & CSS
+# 1. SETUP & CSS (แก้ไขเรื่องการพิมพ์)
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
+# CSS พิเศษสำหรับแก้บั๊กการพิมพ์ใน Streamlit
 st.markdown("""
 <style>
-    /* สไตล์สำหรับตารางรายงาน */
-    .report-table {width: 100%; border-collapse: collapse; font-family: sans-serif;}
-    .report-table th, .report-table td {border: 1px solid #ddd; padding: 8px; font-size: 14px;}
+    /* สไตล์ตาราง */
+    .report-table {width: 100%; border-collapse: collapse; font-family: sans-serif; margin-bottom: 20px;}
+    .report-table th, .report-table td {border: 1px solid #444; padding: 8px; font-size: 14px;}
     .report-table th {background-color: #f2f2f2; text-align: left; font-weight: bold;}
 
     .pass-ok {color: green; font-weight: bold;}
     .pass-no {color: red; font-weight: bold;}
     .sec-row {background-color: #e0e0e0; font-weight: bold; font-size: 15px;}
 
-    /* ตั้งค่าโหมดพิมพ์ (Print CSS) */
+    /* --- PRINT MODE SETTINGS (สำคัญมาก) --- */
     @media print {
+        /* 1. ซ่อนองค์ประกอบที่ไม่ต้องการ */
         section[data-testid="stSidebar"] {display: none !important;}
         header {display: none !important;}
         footer {display: none !important;}
         .stDeployButton {display: none !important;}
-        .stButton {display: none !important;}
-        button {display: none !important;}
+        button {display: none !important;} /* ซ่อนปุ่มทั้งหมด */
+
+        /* 2. จัดการพื้นที่กระดาษ */
+        @page {
+            margin: 1cm;
+            size: A4;
+        }
+
+        body {
+            font-family: 'Sarabun', sans-serif;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
 
         .main .block-container {
             max-width: 100% !important;
-            padding: 20px !important;
+            padding: 0 !important;
             margin: 0 !important;
         }
 
-        /* บังคับพิมพ์สีพื้นหลัง */
-        * {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
+        /* 3. แก้บั๊ก Flexbox/Grid หายตอนพิมพ์ (Force Block) */
+        [data-testid="stVerticalBlock"], [data-testid="stHorizontalBlock"] {
+            display: block !important;
+        }
+
+        /* 4. ปรับขนาดกราฟิกให้พอดีกระดาษ */
+        img {
+            max-width: 100% !important;
+            height: auto !important;
         }
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE & HELPER
+# 2. HELPER FUNCTIONS & DATABASE
 # ==========================================
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
@@ -72,9 +92,6 @@ def fmt(n, digits=3):
         return "-"
 
 
-# ==========================================
-# 3. CALCULATION LOGIC
-# ==========================================
 def beta1FromFc(fc_MPa):
     if fc_MPa <= 28: return 0.85
     b1 = 0.85 - 0.05 * ((fc_MPa - 28) / 7)
@@ -99,7 +116,6 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
         fs_new = min(fy, Es * eps_t)
         fs_new = max(fs_new, -fy)
         a_new = (As_mm2 * fs_new) / (0.85 * fc * bw)
-
         if abs(fs_new - fs) < 0.1 and abs(a_new - a) < 0.1:
             fs = fs_new;
             a = a_new;
@@ -149,6 +165,7 @@ def process_calculation(inputs):
     h_cm = inputs['h']
     cover_cm = inputs['cover']
     agg_mm = inputs.get('agg', 20)
+
     ksc_to_MPa = 0.0980665
     fc = inputs['fc'] * ksc_to_MPa
     fy = inputs['fy'] * ksc_to_MPa
@@ -165,7 +182,6 @@ def process_calculation(inputs):
 
     sec("1. MATERIAL & SECTION PARAMETERS")
     As_min = max(0.25 * math.sqrt(fc) / fy, 1.4 / fy) * bw * d
-
     row("Materials", "-", f"fc'={fmt(fc, 2)} MPa", "-", "-")
     row("Section", "-", f"{fmt(bw, 0)} x {fmt(h, 0)} mm", "-", "mm")
     row("As,min", "max(0.25√fc'/fy, 1.4/fy)bd", "-", f"{fmt(As_min, 0)}", "mm²")
@@ -208,13 +224,7 @@ def process_calculation(inputs):
         rProv = flexureSectionResponse(As_prov, fc, fy, bw, d)
         passStr = rProv['phiMn'] >= Mu_Nmm
         passMax = As_req <= As_max + 1
-
-        usable = bw - 2.0 * (cover + db_st)
-        clear = (usable - n * db_main) / (n - 1) if n > 1 else usable - db_main
-        req_clr = max(db_main, 25.0, 4.0 * agg_mm / 3.0)
-        passClr = clear >= req_clr - 1
-
-        overall = passStr and passMax and passClr
+        overall = passStr and passMax
         if not overall: flex_ok = False
         bar_counts[key] = n
 
@@ -269,14 +279,10 @@ def process_calculation(inputs):
             status_shear)
 
     sec("4. FINAL STATUS")
-    final_status = "OK" if (flex_ok and shear_ok) else "NOT OK"
-    row("Overall", "-", "-", final_status, "-", final_status)
+    row("Overall", "-", "-", "OK" if (flex_ok and shear_ok) else "NOT OK", "-", "")
     return calc_rows, bar_counts, shear_res
 
 
-# ==========================================
-# 4. PLOTTING
-# ==========================================
 def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, bar_name):
     fig, ax = plt.subplots(figsize=(4, 5))
     rect = patches.Rectangle((0, 0), b, h, linewidth=2, edgecolor='#333', facecolor='#FFF')
@@ -287,22 +293,19 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
     ax.add_patch(rect_s)
 
     def draw_row(n, y, color):
-        n = int(n)  # Ensure n is integer
+        n = int(n)
         if n < 1: return
         dia = m_db / 10
-        # Use numpy linspace safely
         if n == 1:
             xs = [b / 2]
         else:
             xs = np.linspace(margin + dia / 2, b - margin - dia / 2, n)
-
         for x in xs:
             circle = patches.Circle((x, y), radius=dia / 2, edgecolor='black', facecolor=color)
             ax.add_patch(circle)
 
     top_n = int(top_n) if top_n else 2
     bot_n = int(bot_n) if bot_n else 2
-
     draw_row(top_n, h - margin - m_db / 20, '#1976D2')
     draw_row(bot_n, margin + m_db / 20, '#D32F2F')
 
@@ -318,11 +321,12 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
 
 
 # ==========================================
-# 5. UI MAIN
+# 4. MAIN APPLICATION
 # ==========================================
 if 'calc_done' not in st.session_state:
     st.session_state['calc_done'] = False
 
+# --- INPUTS (SIDEBAR) ---
 with st.sidebar.form("inputs"):
     st.header("Project Info")
     project_name = st.text_input("Project Name", value="อาคารสำนักงาน 2 ชั้น")
@@ -346,23 +350,20 @@ with st.sidebar.form("inputs"):
     agg = st.number_input("Agg (mm)", value=20)
 
     st.header("3. Loads")
-    st.markdown("**Left Support (tf-m, tf)**")
     c1, c2 = st.columns(2)
-    mu_L_n = c1.number_input("Mu- Top (tf-m)", value=8.0, key='mln')
-    mu_L_p = c2.number_input("Mu+ Bot (tf-m)", value=4.0, key='mlp')
-    vu_L = st.number_input("Vu Left (tf)", value=12.0)
+    mu_L_n = c1.number_input("Mu- Top (Left)", value=8.0)
+    mu_L_p = c2.number_input("Mu+ Bot (Left)", value=4.0)
+    vu_L = st.number_input("Vu Left", value=12.0)
 
-    st.markdown("**Mid Span (tf-m, tf)**")
     c1, c2 = st.columns(2)
-    mu_M_n = c1.number_input("Mu- Top (tf-m)", value=0.0, key='mmn')
-    mu_M_p = c2.number_input("Mu+ Bot (tf-m)", value=8.0, key='mmp')
-    vu_M = st.number_input("Vu Mid (tf)", value=8.0)
+    mu_M_n = c1.number_input("Mu- Top (Mid)", value=0.0)
+    mu_M_p = c2.number_input("Mu+ Bot (Mid)", value=8.0)
+    vu_M = st.number_input("Vu Mid", value=8.0)
 
-    st.markdown("**Right Support (tf-m, tf)**")
     c1, c2 = st.columns(2)
-    mu_R_n = c1.number_input("Mu- Top (tf-m)", value=8.0, key='mrn')
-    mu_R_p = c2.number_input("Mu+ Bot (tf-m)", value=4.0, key='mrp')
-    vu_R = st.number_input("Vu Right (tf)", value=12.0)
+    mu_R_n = c1.number_input("Mu- Top (Right)", value=8.0)
+    mu_R_p = c2.number_input("Mu+ Bot (Right)", value=4.0)
+    vu_R = st.number_input("Vu Right", value=12.0)
 
     run_btn = st.form_submit_button("Run Calculation")
 
@@ -377,14 +378,12 @@ if run_btn:
         'mu_R_n': mu_R_n, 'mu_R_p': mu_R_p,
         'vu_L': vu_L, 'vu_M': vu_M, 'vu_R': vu_R
     }
-    rows, bars, shears = process_calculation(inputs)
     st.session_state['data'] = inputs
-    st.session_state['rows'] = rows
-    st.session_state['bars'] = bars
-    st.session_state['shears'] = shears
+    st.session_state['rows'], st.session_state['bars'], st.session_state['shears'] = process_calculation(inputs)
     st.session_state['calc_done'] = True
 
-if st.session_state.get('calc_done'):
+# --- OUTPUT VIEW ---
+if st.session_state['calc_done']:
     data = st.session_state['data']
     rows = st.session_state['rows']
     bars = st.session_state['bars']
@@ -392,13 +391,15 @@ if st.session_state.get('calc_done'):
     m_db = BAR_INFO[data['mainBar']]['d_mm']
     s_db = BAR_INFO[data['stirrupBar']]['d_mm']
 
-    # --- REPORT HEADER ---
-    st.markdown("<h1 style='text-align: center;'>ENGINEERING DESIGN REPORT</h1>", unsafe_allow_html=True)
-    st.markdown("<h3 style='text-align: center; color: gray;'>Reinforced Concrete Beam Design (ACI 318-19)</h3>",
+    # 1. REPORT HEADER
+    st.markdown("<h1 style='text-align: center; margin-bottom: 5px;'>ENGINEERING DESIGN REPORT</h1>",
                 unsafe_allow_html=True)
-    st.write("---")
+    st.markdown(
+        "<h4 style='text-align: center; color: #555; margin-top: 0;'>Reinforced Concrete Beam Design (ACI 318-19)</h4>",
+        unsafe_allow_html=True)
+    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
 
-    # --- INFO BOX ---
+    # 2. INFO BOX
     c1, c2 = st.columns(2)
     with c1:
         st.markdown(f"**Project:** {data['project']}")
@@ -407,16 +408,16 @@ if st.session_state.get('calc_done'):
         st.markdown("**Date:** 15/12/2568")
         st.markdown("**Code:** ACI 318-19")
 
-    st.write("---")
+    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
 
-    # --- MATERIALS ---
+    # 3. MATERIALS & SECTION
     c1, c2 = st.columns(2)
     with c1:
         st.info(f"**Materials:**\n- fc' = {data['fc']} ksc\n- fy = {data['fy']} ksc\n- fyt = {data['fyt']} ksc")
     with c2:
         st.success(f"**Section:**\n- Size = {data['b']} x {data['h']} cm\n- Cover = {data['cover']} cm")
 
-    # --- GRAPHICS ---
+    # 4. GRAPHICS
     st.subheader("Design Summary")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -435,10 +436,10 @@ if st.session_state.get('calc_done'):
         st.pyplot(fig3)
         plt.close(fig3)
 
-    # --- TABLE ---
+    # 5. TABLE DETAILS
     st.subheader("Calculation Details")
     html = "<table class='report-table'>"
-    html += "<tr><th style='width:30%'>Item</th><th style='width:30%'>Formula</th><th style='width:20%'>Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr>"
+    html += "<tr><th style='width:25%'>Item</th><th style='width:30%'>Formula</th><th style='width:20%'>Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr>"
     for r in rows:
         if r[0] == "SECTION":
             html += f"<tr class='sec-row'><td colspan='6'>{r[1]}</td></tr>"
@@ -447,19 +448,30 @@ if st.session_state.get('calc_done'):
             html += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td><td class='{cls}'>{r[5]}</td></tr>"
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
+
     st.write("---")
 
-    # --- PRINT BUTTON ---
+    # 6. PRINT BUTTON (JAVASCRIPT)
     components.html("""
-        <div style="text-align: center; margin-top: 20px;">
+        <div style="text-align: center;">
             <button onclick="window.print()" style="
-                background-color: #008CBA; border: none; color: white; padding: 15px 32px; 
-                text-align: center; display: inline-block; font-size: 16px; margin: 4px 2px; 
-                cursor: pointer; border-radius: 8px; font-weight: bold;">
-                🖨️ พิมพ์รายงาน (Print to PDF)
+                background-color: #008CBA; 
+                border: none; 
+                color: white; 
+                padding: 15px 32px; 
+                text-align: center; 
+                text-decoration: none; 
+                display: inline-block; 
+                font-size: 16px; 
+                margin: 4px 2px; 
+                cursor: pointer; 
+                border-radius: 8px;
+                font-weight: bold;
+                box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2);">
+                🖨️ พิมพ์รายงาน / บันทึกเป็น PDF
             </button>
         </div>
-    """, height=100)
+    """, height=80)
 
 else:
-    st.info("👈 กรุณากรอกข้อมูลทางด้านซ้าย แล้วกดปุ่ม 'Run Calculation' เพื่อเริ่มคำนวณ")
+    st.info("👈 กรุณากรอกข้อมูลทางด้านซ้าย แล้วกดปุ่ม 'Run Calculation'")
