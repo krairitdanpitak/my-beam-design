@@ -1,7 +1,7 @@
 import streamlit as st
 import matplotlib
 
-matplotlib.use('Agg')  # ใช้ Backend แบบไม่แสดงผลหน้าจอ เพื่อความเสถียรบน Server
+matplotlib.use('Agg')  # ใช้ Backend แบบไม่แสดงผลหน้าจอ เพื่อความเสถียร
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
@@ -17,17 +17,16 @@ st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
 
 def check_font():
-    """ตรวจสอบและดาวน์โหลดฟอนต์ภาษาไทยสำหรับ PDF"""
+    """ตรวจสอบและดาวน์โหลดฟอนต์ภาษาไทย"""
     font_name = "THSarabunNew.ttf"
     if not os.path.exists(font_name):
         try:
-            # ลิงก์ดาวน์โหลดฟอนต์ (สามารถเปลี่ยนได้หากลิงก์เสีย)
             url = "https://github.com/nutjunkie/thaifonts/raw/master/THSarabunNew.ttf"
             r = requests.get(url, allow_redirects=True, timeout=10)
             with open(font_name, 'wb') as f:
                 f.write(r.content)
         except:
-            pass  # ถ้าโหลดไม่ได้ จะใช้ฟอนต์มาตรฐานแทน
+            pass
     return font_name
 
 
@@ -47,7 +46,6 @@ BAR_INFO = {
 
 
 def fmt(n, digits=3):
-    """จัดรูปแบบตัวเลขทศนิยม"""
     try:
         if n is None: return "-"
         val = float(n)
@@ -58,34 +56,26 @@ def fmt(n, digits=3):
 
 
 # ==========================================
-# 3. CALCULATION ENGINE (ACI 318-19 Metric)
+# 3. CALCULATION ENGINE (ACI 318-19)
 # ==========================================
 def beta1FromFc(fc_MPa):
-    """คำนวณ Beta1 ตาม Source [cite: 26-28]"""
     if fc_MPa <= 28: return 0.85
     b1 = 0.85 - 0.05 * ((fc_MPa - 28) / 7)
     return max(0.65, b1)
 
 
 def phiFlexureFromStrain(eps_t):
-    """คำนวณ Phi Reduction Factor ตาม Source [cite: 28-30]"""
     if eps_t <= 0.002: return 0.65
     if eps_t >= 0.005: return 0.90
     return 0.65 + (eps_t - 0.002) * (0.25 / 0.003)
 
 
 def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
-    """
-    คำนวณโมเมนต์ดัดโดยวิธี Strain Compatibility (Iteration)
-    ตาม Source 
-    """
     beta1 = beta1FromFc(fc)
     fs = fy
-    # Initial guess
     a = (As_mm2 * fs) / (0.85 * fc * bw) if fc > 0 else 0
     c = a / beta1 if beta1 > 0 else 0
 
-    # วนลูปหาจุดสมดุล
     for i in range(50):
         if c <= 0.1: c = 0.1
         eps_t = eps_cu * (d - c) / c
@@ -93,14 +83,12 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
         fs_new = max(fs_new, -fy)
 
         a_new = (As_mm2 * fs_new) / (0.85 * fc * bw)
-
-        # เช็คการลู่เข้า
         if abs(fs_new - fs) < 0.1 and abs(a_new - a) < 0.1:
-            fs = fs_new
-            a = a_new
+            fs = fs_new;
+            a = a_new;
             break
-        fs = fs_new
-        a = a_new
+        fs = fs_new;
+        a = a_new;
         c = a / beta1
 
     c = a / beta1
@@ -115,23 +103,19 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
 
 
 def solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d):
-    """
-    คำนวณปริมาณเหล็กเสริมที่ต้องการ (As Required)
-    """
     As_lo = As_min
     As_hi = As_lo
 
-    # 1. ขยายขอบเขตบน (Expand Hi)
+    # 1. Expand Hi
     for _ in range(30):
         r = flexureSectionResponse(As_hi, fc, fy, bw, d)
-        if r['phiMn'] >= Mu_Nmm:
-            break
+        if r['phiMn'] >= Mu_Nmm: break
         As_hi *= 1.3
         if As_hi > As_max:
             As_hi = As_max
             break
 
-    # 2. ค้นหาแบบ Binary Search
+    # 2. Binary Search
     for _ in range(50):
         As_mid = 0.5 * (As_lo + As_hi)
         r = flexureSectionResponse(As_mid, fc, fy, bw, d)
@@ -144,17 +128,15 @@ def solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d):
 
 
 def process_calculation(inputs):
-    """ฟังก์ชันหลักประมวลผล"""
     calc_rows = []
 
-    # Helper ในการเก็บข้อมูลลงตาราง
     def sec(title):
         calc_rows.append(["SECTION", title, "", "", "", ""])
 
     def row(item, formula, subs, result, unit, status=""):
         calc_rows.append([item, formula, subs, result, unit, status])
 
-    # --- 1. แปลง Input ---
+    # Inputs
     b_cm = inputs['b']
     h_cm = inputs['h']
     cover_cm = inputs['cover']
@@ -173,18 +155,14 @@ def process_calculation(inputs):
     stirKey = inputs['stirrupBar']
     db_st = BAR_INFO[stirKey]['d_mm']
     db_main = BAR_INFO[barKey]['d_mm']
-
     d = h - cover - db_st - db_main / 2.0
 
-    # --- 2. Parameters ---
+    # Header
     sec("1. MATERIAL & SECTION PARAMETERS")
     beta1 = beta1FromFc(fc)
-
-    # As Min / Max (Source [cite: 45-49])
     rho1 = 0.25 * math.sqrt(fc) / fy
     rho2 = 1.4 / fy
     As_min = max(rho1, rho2) * bw * d
-
     Es = 200000
     eps_cu = 0.003
     eps_y = fy / Es
@@ -195,7 +173,7 @@ def process_calculation(inputs):
     row("Section", "-", f"{fmt(bw, 0)} x {fmt(h, 0)} mm", "-", "mm")
     row("As,min", "max(0.25√fc'/fy, 1.4/fy)bd", "-", f"{fmt(As_min, 0)}", "mm²")
 
-    # --- 3. FLEXURE ---
+    # Flexure
     sec("2. FLEXURE DESIGN")
     MuCases = [
         {'key': "L_TOP", 't': "Left (Top) Mu(-)", 'v': inputs['mu_L_n']},
@@ -214,28 +192,22 @@ def process_calculation(inputs):
         Mu_tfm = case['v']
         key = case['key']
 
-        # ถ้าโมเมนต์เป็น 0 ใส่เหล็กขั้นต่ำ 2 เส้น
         if Mu_tfm <= 0.001:
             bar_counts[key] = 2
             continue
 
         Mu_Nmm = Mu_tfm * 9806650.0
-
-        # คำนวณ As Req
         As_req = solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d)
 
-        # จัดเหล็ก
         bar_area = BAR_INFO[barKey]['A_cm2'] * 100
         n = math.ceil(As_req / bar_area)
         if n < 2: n = 2
         As_prov = n * bar_area
 
-        # ตรวจสอบกำลัง
         rProv = flexureSectionResponse(As_prov, fc, fy, bw, d)
         passStr = rProv['phiMn'] >= Mu_Nmm
         passMax = As_req <= As_max + 1
 
-        # ตรวจสอบระยะเรียง
         usable = bw - 2.0 * (cover + db_st)
         clear = (usable - n * db_main) / (n - 1) if n > 1 else usable - db_main
         req_clr = max(db_main, 25.0, 4.0 * agg_mm / 3.0)
@@ -249,12 +221,11 @@ def process_calculation(inputs):
         row(f"{title}: Provide", f"Use {barKey}", f"{n}-{barKey}", "OK" if overall else "NO", "-")
         row(f"{title}: Check", "φMn ≥ Mu", f"{fmt(rProv['phiMn'] / 9.8e6, 3)}", "PASS" if passStr else "FAIL", "tf-m")
 
-    # --- 4. SHEAR ---
+    # Shear
     sec("3. SHEAR DESIGN")
     Vc_N = 0.17 * math.sqrt(fc) * bw * d
     phi_v = 0.75
     phiVc_N = phi_v * Vc_N
-
     Av = 2.0 * BAR_INFO[stirKey]['A_cm2'] * 100
     req1 = 0.062 * math.sqrt(fc) * bw / fyt
     req2 = 0.35 * bw / fyt
@@ -265,9 +236,8 @@ def process_calculation(inputs):
         {'key': "V_M", 't': "Mid", 'v': inputs['vu_M']},
         {'key': "V_R", 't': "Right", 'v': inputs['vu_R']}
     ]
-
-    shear_res = {}
     shear_ok = True
+    shear_res = {}
 
     row("Vc", "0.17√fc' bd", "-", f"{fmt(Vc_N / 9806.65, 2)}", "tf")
     row("φVc", "0.75 * Vc", "-", f"{fmt(phiVc_N / 9806.65, 2)}", "tf")
@@ -278,7 +248,6 @@ def process_calculation(inputs):
         Vu_N = Vu_tf * 9806.65
         needVs = Vu_N > phiVc_N
 
-        # ระยะห่างสูงสุด s_max (Source [cite: 98-99])
         s1 = (d / 2.0) if needVs else (0.75 * d)
         smax = min(s1, 600.0)
 
@@ -288,13 +257,11 @@ def process_calculation(inputs):
             if Vs_req_N > 0:
                 s_req = (Av * fyt * d) / Vs_req_N
 
-        # เลือกระยะ s
         s_sel = min(s_avmin, smax)
         if needVs: s_sel = min(s_sel, s_req)
         s_sel = math.floor(s_sel / 25.0) * 25.0
         s_sel = max(50.0, s_sel)
 
-        # ตรวจสอบกำลังเฉือน
         Vs_prov = (Av * fyt * d) / s_sel
         phiVn = phi_v * (Vc_N + Vs_prov)
         passStr = Vu_N <= phiVn + 1
@@ -306,22 +273,18 @@ def process_calculation(inputs):
         row(f"{loc}: Provide", f"min(req, {fmt(s_avmin, 0)})", "-", f"{stirKey} @ {fmt(s_sel / 10, 0)} cm", "-",
             "OK" if passStr else "NO")
 
-    # Final Status
     sec("4. FINAL STATUS")
     row("Overall", "-", "-", "OK" if (flex_ok and shear_ok) else "NOT OK", "-", "")
-
     return calc_rows, bar_counts, shear_res
 
 
 # ==========================================
-# 4. PLOTTING & PDF CLASSES
+# 4. PLOTTING & PDF
 # ==========================================
 def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, bar_name):
-    """สร้างรูปกราฟิกหน้าตัดคาน"""
     fig, ax = plt.subplots(figsize=(4, 5))
     rect = patches.Rectangle((0, 0), b, h, linewidth=2, edgecolor='#333', facecolor='#FFF')
     ax.add_patch(rect)
-
     margin = cover + s_db / 20
     rect_s = patches.Rectangle((margin, margin), b - 2 * margin, h - 2 * margin, linewidth=2, edgecolor='#2E7D32',
                                facecolor='none', linestyle='-')
@@ -335,10 +298,8 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
             circle = patches.Circle((x, y), radius=dia / 2, edgecolor='black', facecolor=color)
             ax.add_patch(circle)
 
-    # Defaults
     top_n = top_n if top_n else 2
     bot_n = bot_n if bot_n else 2
-
     draw_row(top_n, h - margin - m_db / 20, '#1976D2')
     draw_row(bot_n, margin + m_db / 20, '#D32F2F')
 
@@ -347,11 +308,9 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
     ax.axis('off')
     ax.set_aspect('equal')
     ax.set_title(title, fontsize=10, fontweight='bold')
-
     ax.text(b / 2, h * 1.05, f"{top_n}-{bar_name}", ha='center', color='#1976D2', fontsize=9)
     ax.text(b / 2, -h * 0.05, f"{bot_n}-{bar_name}", ha='center', color='#D32F2F', fontsize=9)
     ax.text(b / 2, -h * 0.15, f"Stir: {stir_txt}", ha='center', color='#2E7D32', fontsize=9)
-
     return fig
 
 
@@ -367,11 +326,14 @@ class PDF(FPDF):
             pass
 
 
-def create_pdf(inputs, rows, img_files):
+def create_pdf_bytes(inputs, rows, img_files):
+    """
+    แก้ปัญหา 'latin-1' error โดยการเขียนลงไฟล์แล้วอ่านเป็น Binary
+    """
     font_path = check_font()
     pdf = PDF()
 
-    # Register Thai Font if available
+    # เพิ่มฟอนต์ไทย
     has_thai = False
     if os.path.exists(font_path):
         try:
@@ -424,10 +386,8 @@ def create_pdf(inputs, rows, img_files):
     # Images
     if has_thai: pdf.set_font('THSarabunNew', 'B', 14)
     pdf.cell(0, 10, "Design Summary", 0, 1)
-
     y_start = pdf.get_y()
     w_img = 60
-
     if len(img_files) >= 3:
         try:
             pdf.image(img_files[0], x=10, y=y_start, w=w_img)
@@ -440,7 +400,6 @@ def create_pdf(inputs, rows, img_files):
     # Table
     pdf.add_page()
     pdf.cell(0, 10, "Calculation Details", 0, 1)
-
     pdf.set_fill_color(200, 200, 200)
     if has_thai: pdf.set_font('THSarabunNew', 'B', 12)
     cols = [40, 50, 45, 30, 25]
@@ -461,11 +420,21 @@ def create_pdf(inputs, rows, img_files):
             pdf.cell(cols[3], 7, str(r[3]), 1)
             pdf.cell(cols[4], 7, str(r[4]), 1, 1)
 
-    return pdf.output(dest='S').encode('latin-1')
+    # *** CRITICAL FIX: Save to file and read binary ***
+    temp_filename = "temp_report_out.pdf"
+    pdf.output(temp_filename)
+    with open(temp_filename, "rb") as f:
+        pdf_bytes = f.read()
+    try:
+        os.remove(temp_filename)
+    except:
+        pass
+
+    return pdf_bytes
 
 
 # ==========================================
-# 5. UI & EXECUTION
+# 5. UI
 # ==========================================
 st.markdown("""
 <style>
@@ -480,7 +449,6 @@ st.markdown("""
 
 st.title("RC Beam Designer Pro (ACI 318-19)")
 
-# --- Sidebar Inputs ---
 with st.sidebar.form("inputs"):
     st.header("Project Info")
     project_name = st.text_input("Project Name", value="อาคารพักอาศัย 2 ชั้น")
@@ -524,7 +492,6 @@ with st.sidebar.form("inputs"):
 
     run_btn = st.form_submit_button("Run Calculation")
 
-# --- Main Logic ---
 if run_btn:
     try:
         inputs = {
@@ -540,7 +507,6 @@ if run_btn:
 
         rows, bars, shears = process_calculation(inputs)
 
-        # 1. Generate & Save Plots
         img_files = []
         m_db = BAR_INFO[mainBarKey]['d_mm']
         s_db = BAR_INFO[stirrupBarKey]['d_mm']
@@ -570,9 +536,10 @@ if run_btn:
             img_files.append("temp_R.png")
             plt.close(fig3)
 
-        # 2. PDF Download
         st.write("---")
-        pdf_bytes = create_pdf(inputs, rows, img_files)
+        # ใช้ฟังก์ชัน create_pdf_bytes ที่แก้ Error แล้ว
+        pdf_bytes = create_pdf_bytes(inputs, rows, img_files)
+
         st.download_button(
             label="🖨️ Print / Download Report (PDF)",
             data=pdf_bytes,
@@ -580,7 +547,6 @@ if run_btn:
             mime="application/pdf"
         )
 
-        # 3. HTML Table Report
         st.markdown("### Calculation Report")
         html = "<table class='report-table'>"
         html += "<tr><th>Item</th><th>Formula / Ref</th><th>Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr>"
