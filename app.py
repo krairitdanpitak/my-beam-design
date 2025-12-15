@@ -1,49 +1,45 @@
 import streamlit as st
 import matplotlib
 
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # ป้องกัน Error กราฟิกบน Server
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
+import numpy as np  # <--- เพิ่มบรรทัดนี้แล้ว (แก้ NameError)
 import streamlit.components.v1 as components
 
 # ==========================================
-# 1. SETUP & CSS FOR PRINTING
+# 1. SETUP & CSS
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
-# CSS สำหรับจัดหน้าตอนพิมพ์ (ซ่อน Sidebar, ขยายเต็มจอ)
 st.markdown("""
 <style>
     /* สไตล์สำหรับตารางรายงาน */
-    .report-table {width: 100%; border-collapse: collapse; font-family: 'Sarabun', sans-serif;}
-    .report-table th, .report-table td {border: 1px solid #333; padding: 8px; font-size: 14px;}
-    .report-table th {background-color: #f0f0f0; text-align: left; font-weight: bold;}
+    .report-table {width: 100%; border-collapse: collapse; font-family: sans-serif;}
+    .report-table th, .report-table td {border: 1px solid #ddd; padding: 8px; font-size: 14px;}
+    .report-table th {background-color: #f2f2f2; text-align: left; font-weight: bold;}
 
     .pass-ok {color: green; font-weight: bold;}
     .pass-no {color: red; font-weight: bold;}
-    .sec-row {background-color: #e6e6e6; font-weight: bold; font-size: 15px;}
+    .sec-row {background-color: #e0e0e0; font-weight: bold; font-size: 15px;}
 
-    /* ตั้งค่าโหมดพิมพ์ (Print Media Query) */
+    /* ตั้งค่าโหมดพิมพ์ (Print CSS) */
     @media print {
-        /* ซ่อน Sidebar และ Header ของ Streamlit */
         section[data-testid="stSidebar"] {display: none !important;}
         header {display: none !important;}
-        .stDeployButton {display: none !important;}
         footer {display: none !important;}
-
-        /* ซ่อนปุ่มกดต่างๆ */
+        .stDeployButton {display: none !important;}
         .stButton {display: none !important;}
         button {display: none !important;}
 
-        /* ปรับพื้นที่เนื้อหาให้เต็มกระดาษ */
         .main .block-container {
             max-width: 100% !important;
-            padding: 1cm !important;
+            padding: 20px !important;
             margin: 0 !important;
         }
 
-        /* บังคับให้พิมพ์พื้นหลัง (เพื่อให้เห็นสีตาราง) */
+        /* บังคับพิมพ์สีพื้นหลัง */
         * {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
@@ -118,7 +114,6 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
     T = As_mm2 * fs
     Mn = T * (d - a / 2.0)
     phiMn = phi * Mn
-
     return {'phi': phi, 'phiMn': phiMn, 'eps_t': eps_t}
 
 
@@ -292,15 +287,22 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
     ax.add_patch(rect_s)
 
     def draw_row(n, y, color):
+        n = int(n)  # Ensure n is integer
         if n < 1: return
         dia = m_db / 10
-        xs = [b / 2] if n == 1 else np.linspace(margin + dia / 2, b - margin - dia / 2, n)
+        # Use numpy linspace safely
+        if n == 1:
+            xs = [b / 2]
+        else:
+            xs = np.linspace(margin + dia / 2, b - margin - dia / 2, n)
+
         for x in xs:
             circle = patches.Circle((x, y), radius=dia / 2, edgecolor='black', facecolor=color)
             ax.add_patch(circle)
 
-    top_n = top_n if top_n else 2
-    bot_n = bot_n if bot_n else 2
+    top_n = int(top_n) if top_n else 2
+    bot_n = int(bot_n) if bot_n else 2
+
     draw_row(top_n, h - margin - m_db / 20, '#1976D2')
     draw_row(bot_n, margin + m_db / 20, '#D32F2F')
 
@@ -321,7 +323,6 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
 if 'calc_done' not in st.session_state:
     st.session_state['calc_done'] = False
 
-# Sidebar Inputs
 with st.sidebar.form("inputs"):
     st.header("Project Info")
     project_name = st.text_input("Project Name", value="อาคารสำนักงาน 2 ชั้น")
@@ -408,7 +409,7 @@ if st.session_state.get('calc_done'):
 
     st.write("---")
 
-    # --- MATERIALS & SECTION ---
+    # --- MATERIALS ---
     c1, c2 = st.columns(2)
     with c1:
         st.info(f"**Materials:**\n- fc' = {data['fc']} ksc\n- fy = {data['fy']} ksc\n- fyt = {data['fyt']} ksc")
@@ -434,7 +435,7 @@ if st.session_state.get('calc_done'):
         st.pyplot(fig3)
         plt.close(fig3)
 
-    # --- CALCULATION DETAILS ---
+    # --- TABLE ---
     st.subheader("Calculation Details")
     html = "<table class='report-table'>"
     html += "<tr><th style='width:30%'>Item</th><th style='width:30%'>Formula</th><th style='width:20%'>Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr>"
@@ -448,27 +449,14 @@ if st.session_state.get('calc_done'):
     st.markdown(html, unsafe_allow_html=True)
     st.write("---")
 
-    # --- PRINT BUTTON (DIRECT BROWSER PRINT) ---
-    st.info(
-        "💡 กดปุ่มด้านล่างเพื่อพิมพ์รายงาน (หากต้องการ Save เป็น PDF ให้เลือก Destination เป็น 'Save as PDF' ในหน้าต่างพิมพ์)")
-
-    # Inject JavaScript for Printing
+    # --- PRINT BUTTON ---
     components.html("""
         <div style="text-align: center; margin-top: 20px;">
             <button onclick="window.print()" style="
-                background-color: #008CBA; 
-                border: none; 
-                color: white; 
-                padding: 15px 32px; 
-                text-align: center; 
-                text-decoration: none; 
-                display: inline-block; 
-                font-size: 16px; 
-                margin: 4px 2px; 
-                cursor: pointer; 
-                border-radius: 8px;
-                font-weight: bold;">
-                🖨️ พิมพ์รายงาน / บันทึกเป็น PDF (Print)
+                background-color: #008CBA; border: none; color: white; padding: 15px 32px; 
+                text-align: center; display: inline-block; font-size: 16px; margin: 4px 2px; 
+                cursor: pointer; border-radius: 8px; font-weight: bold;">
+                🖨️ พิมพ์รายงาน (Print to PDF)
             </button>
         </div>
     """, height=100)
