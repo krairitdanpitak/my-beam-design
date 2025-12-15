@@ -13,7 +13,8 @@ import streamlit.components.v1 as components
 # ==========================================
 # 1. SETUP & CSS
 # ==========================================
-st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
+# --- CHANGED: Page Title ---
+st.set_page_config(page_title="RC Beam Design SDM", layout="wide")
 
 st.markdown("""
 <style>
@@ -455,7 +456,7 @@ def generate_full_html_report(inputs, rows, img_b64_list):
         <div class="header">
             <div class="beam-box">{inputs['beam_id']}</div>
             <h1>ENGINEERING DESIGN REPORT</h1>
-            <h3>Reinforced Concrete Beam Design (ACI 318-19)</h3>
+            <h3>RC Beam Design SDM</h3>
         </div>
 
         <div class="info-container">
@@ -513,7 +514,8 @@ def generate_full_html_report(inputs, rows, img_b64_list):
 # ==========================================
 # 5. UI MAIN
 # ==========================================
-st.title("RC Beam Designer Pro (ACI 318-19)")
+# --- CHANGED: Main Title ---
+st.title("RC Beam Design SDM")
 
 if 'calc_done' not in st.session_state:
     st.session_state['calc_done'] = False
