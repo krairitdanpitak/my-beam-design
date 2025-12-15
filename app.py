@@ -15,6 +15,9 @@ from fpdf import FPDF
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
+if 'calc_done' not in st.session_state:
+    st.session_state['calc_done'] = False
+
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
     'RB9': {'A_cm2': 0.636, 'd_mm': 9},
@@ -38,7 +41,7 @@ def fmt(n, digits=3):
 
 
 # ==========================================
-# 2. CALCULATION
+# 2. CALCULATION LOGIC
 # ==========================================
 def beta1FromFc(fc_MPa):
     if fc_MPa <= 28: return 0.85
@@ -238,10 +241,9 @@ def process_calculation(inputs):
 
 
 # ==========================================
-# 3. PDF GENERATOR (ROBUST)
+# 3. PDF GENERATOR
 # ==========================================
 def check_font():
-    """Download font if missing"""
     font_name = "THSarabunNew.ttf"
     if not os.path.exists(font_name):
         try:
@@ -257,7 +259,6 @@ def check_font():
 
 class PDF(FPDF):
     def header(self):
-        # Default header without Thai to be safe
         try:
             self.set_font('Arial', 'B', 16)
             self.cell(0, 10, 'ENGINEERING DESIGN REPORT', 0, 1, 'C')
@@ -266,46 +267,32 @@ class PDF(FPDF):
             pass
 
 
-def generate_pdf_file(inputs, rows, img_files, use_thai):
-    """
-    Core function to generate PDF.
-    If use_thai=True, attempts to use THSarabunNew.
-    If use_thai=False, strips non-latin chars.
-    """
+def create_safe_pdf(inputs, rows, img_files):
+    font_path = check_font()
     pdf = PDF()
 
-    # 1. Setup Font
-    font_path = "THSarabunNew.ttf"
-    font_ready = False
-
-    if use_thai and os.path.exists(font_path):
+    has_thai = False
+    if os.path.exists(font_path):
         try:
             pdf.add_font('THSarabunNew', '', font_path, uni=True)
             pdf.add_font('THSarabunNew', 'B', font_path, uni=True)
-            font_ready = True
+            has_thai = True
         except:
-            font_ready = False
+            pass
 
-    pdf.add_page()
-
-    # Helper to clean text
+    # ถ้ามีฟอนต์ไทยให้ใช้ ถ้าไม่มีให้ใช้ Arial แล้วตัดคำไทยออก
     def txt(s):
         s = str(s)
-        if font_ready: return s
-        # Strip non-latin if no font support
+        if has_thai: return s
+        # Safe Mode: กรองตัวอักษรที่ไม่ใช่ Latin-1 ออก
         return s.encode('latin-1', 'ignore').decode('latin-1')
 
-    # Set Font
-    if font_ready:
+    pdf.add_page()
+    if has_thai:
         pdf.set_font('THSarabunNew', '', 14)
-        header_font = ('THSarabunNew', 'B', 14)
-        body_font = ('THSarabunNew', '', 12)
     else:
         pdf.set_font('Arial', '', 12)
-        header_font = ('Arial', 'B', 12)
-        body_font = ('Arial', '', 11)
 
-    # Info Box
     pdf.cell(30, 8, txt("Project:"), 0)
     pdf.cell(90, 8, txt(inputs['project']), 0)
     pdf.cell(20, 8, txt("Date:"), 0)
@@ -317,30 +304,28 @@ def generate_pdf_file(inputs, rows, img_files, use_thai):
     pdf.cell(0, 8, "ACI 318-19", 0, 1)
     pdf.ln(5)
 
-    # Material Box
     pdf.set_fill_color(240, 240, 240)
     pdf.rect(10, pdf.get_y(), 90, 35, 'F')
     pdf.rect(105, pdf.get_y(), 95, 35, 'F')
 
     pdf.set_xy(12, pdf.get_y() + 2)
-    pdf.set_font(*header_font)
+    if has_thai: pdf.set_font('THSarabunNew', 'B', 14)
     pdf.cell(80, 8, txt("Materials"), "B", 2)
-    pdf.set_font(*body_font)
+    if has_thai: pdf.set_font('THSarabunNew', '', 12)
     pdf.cell(80, 6, txt(f"Concrete (fc') = {inputs['fc']} ksc"), 0, 2)
     pdf.cell(80, 6, txt(f"Main Steel (fy) = {inputs['fy']} ksc"), 0, 2)
     pdf.cell(80, 6, txt(f"Stirrup (fyt) = {inputs['fyt']} ksc"), 0, 0)
 
     pdf.set_xy(107, pdf.get_y() - 22)
-    pdf.set_font(*header_font)
+    if has_thai: pdf.set_font('THSarabunNew', 'B', 14)
     pdf.cell(80, 8, txt("Section"), "B", 2)
-    pdf.set_font(*body_font)
+    if has_thai: pdf.set_font('THSarabunNew', '', 12)
     pdf.cell(80, 6, txt(f"Size = {inputs['b']} x {inputs['h']} cm"), 0, 2)
     pdf.cell(80, 6, txt(f"Cover = {inputs['cover']} cm"), 0, 2)
     pdf.cell(80, 6, txt(f"Aggregate = {inputs['agg']} mm"), 0, 0)
     pdf.ln(15)
 
-    # Summary
-    pdf.set_font(*header_font)
+    if has_thai: pdf.set_font('THSarabunNew', 'B', 14)
     pdf.cell(0, 10, txt("Design Summary"), 0, 1)
     y_start = pdf.get_y()
     w_img = 60
@@ -353,19 +338,17 @@ def generate_pdf_file(inputs, rows, img_files, use_thai):
             pass
     pdf.ln(80)
 
-    # Table
     pdf.add_page()
     pdf.cell(0, 10, txt("Calculation Details"), 0, 1)
-
     pdf.set_fill_color(200, 200, 200)
-    pdf.set_font(*header_font)
+    if has_thai: pdf.set_font('THSarabunNew', 'B', 12)
     cols = [40, 50, 45, 30, 25]
     headers = ["Item", "Formula", "Substitution", "Result", "Unit"]
     for i, h in enumerate(headers):
         pdf.cell(cols[i], 8, txt(h), 1, 0, 'C', True)
     pdf.ln()
 
-    pdf.set_font(*body_font)
+    if has_thai: pdf.set_font('THSarabunNew', '', 11)
     for r in rows:
         if r[0] == "SECTION":
             pdf.set_fill_color(230, 230, 230)
@@ -377,20 +360,16 @@ def generate_pdf_file(inputs, rows, img_files, use_thai):
             pdf.cell(cols[3], 7, txt(r[3]), 1)
             pdf.cell(cols[4], 7, txt(r[4]), 1, 1)
 
-    # Return binary
-    return pdf.output(dest='S').encode('latin-1')
-
-
-def create_safe_pdf(inputs, rows, img_files):
-    """
-    Try creating PDF with Thai. If fails, fallback to English only.
-    """
-    check_font()  # Ensure font is downloaded
+    # Binary Write & Read (Safe Method)
+    temp = "report.pdf"
+    pdf.output(temp)
+    with open(temp, "rb") as f:
+        data = f.read()
     try:
-        return generate_pdf_file(inputs, rows, img_files, use_thai=True)
-    except Exception:
-        # Fallback: Strip Thai characters to avoid crash
-        return generate_pdf_file(inputs, rows, img_files, use_thai=False)
+        os.remove(temp)
+    except:
+        pass
+    return data
 
 
 def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, bar_name):
@@ -486,74 +465,86 @@ with st.sidebar.form("inputs"):
     run_btn = st.form_submit_button("Run Calculation")
 
 if run_btn:
-    try:
-        inputs = {
-            'project': project_name, 'engineer': engineer_name,
-            'b': b, 'h': h, 'cover': cover, 'agg': agg,
-            'fc': fc, 'fy': fy, 'fyt': fyt,
-            'mainBar': mainBarKey, 'stirrupBar': stirrupBarKey,
-            'mu_L_n': mu_L_n, 'mu_L_p': mu_L_p,
-            'mu_M_n': mu_M_n, 'mu_M_p': mu_M_p,
-            'mu_R_n': mu_R_n, 'mu_R_p': mu_R_p,
-            'vu_L': vu_L, 'vu_M': vu_M, 'vu_R': vu_R
-        }
+    # 1. CALCULATE AND STORE IN SESSION STATE
+    inputs = {
+        'project': project_name, 'engineer': engineer_name,
+        'b': b, 'h': h, 'cover': cover, 'agg': agg,
+        'fc': fc, 'fy': fy, 'fyt': fyt,
+        'mainBar': mainBarKey, 'stirrupBar': stirrupBarKey,
+        'mu_L_n': mu_L_n, 'mu_L_p': mu_L_p,
+        'mu_M_n': mu_M_n, 'mu_M_p': mu_M_p,
+        'mu_R_n': mu_R_n, 'mu_R_p': mu_R_p,
+        'vu_L': vu_L, 'vu_M': vu_M, 'vu_R': vu_R
+    }
 
-        rows, bars, shears = process_calculation(inputs)
+    rows, bars, shears = process_calculation(inputs)
 
-        img_files = []
-        m_db = BAR_INFO[mainBarKey]['d_mm']
-        s_db = BAR_INFO[stirrupBarKey]['d_mm']
+    st.session_state['data'] = inputs
+    st.session_state['rows'] = rows
+    st.session_state['bars'] = bars
+    st.session_state['shears'] = shears
+    st.session_state['calc_done'] = True
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            fig1 = create_beam_section(b, h, cover, bars.get('L_TOP', 2), bars.get('L_BOT', 2),
-                                       f"@{shears['V_L'] / 10:.0f}cm", m_db, s_db, "Left Support", mainBarKey)
-            st.pyplot(fig1)
-            fig1.savefig("temp_L.png", dpi=100, bbox_inches='tight')
-            img_files.append("temp_L.png")
-            plt.close(fig1)
+# --- DISPLAY RESULTS (PERSISTENT) ---
+if st.session_state.get('calc_done'):
+    data = st.session_state['data']
+    rows = st.session_state['rows']
+    bars = st.session_state['bars']
+    shears = st.session_state['shears']
 
-        with col2:
-            fig2 = create_beam_section(b, h, cover, bars.get('M_TOP', 2), bars.get('M_BOT', 2),
-                                       f"@{shears['V_M'] / 10:.0f}cm", m_db, s_db, "Mid Span", mainBarKey)
-            st.pyplot(fig2)
-            fig2.savefig("temp_M.png", dpi=100, bbox_inches='tight')
-            img_files.append("temp_M.png")
-            plt.close(fig2)
+    m_db = BAR_INFO[data['mainBar']]['d_mm']
+    s_db = BAR_INFO[data['stirrupBar']]['d_mm']
 
-        with col3:
-            fig3 = create_beam_section(b, h, cover, bars.get('R_TOP', 2), bars.get('R_BOT', 2),
-                                       f"@{shears['V_R'] / 10:.0f}cm", m_db, s_db, "Right Support", mainBarKey)
-            st.pyplot(fig3)
-            fig3.savefig("temp_R.png", dpi=100, bbox_inches='tight')
-            img_files.append("temp_R.png")
-            plt.close(fig3)
+    img_files = []
 
-        st.write("---")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        fig1 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('L_TOP', 2), bars.get('L_BOT', 2),
+                                   f"@{shears['V_L'] / 10:.0f}cm", m_db, s_db, "Left Support", data['mainBar'])
+        st.pyplot(fig1)
+        fig1.savefig("temp_L.png", dpi=100, bbox_inches='tight')
+        img_files.append("temp_L.png")
+        plt.close(fig1)
 
-        # *** SAFE PDF GENERATION ***
-        pdf_bytes = create_safe_pdf(inputs, rows, img_files)
+    with col2:
+        fig2 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('M_TOP', 2), bars.get('M_BOT', 2),
+                                   f"@{shears['V_M'] / 10:.0f}cm", m_db, s_db, "Mid Span", data['mainBar'])
+        st.pyplot(fig2)
+        fig2.savefig("temp_M.png", dpi=100, bbox_inches='tight')
+        img_files.append("temp_M.png")
+        plt.close(fig2)
 
-        st.download_button(
-            label="🖨️ Print / Download Report (PDF)",
-            data=pdf_bytes,
-            file_name="Beam_Design_Report.pdf",
-            mime="application/pdf"
-        )
+    with col3:
+        fig3 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('R_TOP', 2), bars.get('R_BOT', 2),
+                                   f"@{shears['V_R'] / 10:.0f}cm", m_db, s_db, "Right Support", data['mainBar'])
+        st.pyplot(fig3)
+        fig3.savefig("temp_R.png", dpi=100, bbox_inches='tight')
+        img_files.append("temp_R.png")
+        plt.close(fig3)
 
-        st.markdown("### Calculation Report")
-        html = "<table class='report-table'>"
-        html += "<tr><th>Item</th><th>Formula / Ref</th><th>Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr>"
-        for r in rows:
-            if r[0] == "SECTION":
-                html += f"<tr class='sec-row'><td colspan='6'>{r[1]}</td></tr>"
-            else:
-                cls = "pass-ok" if r[5] in ["OK", "PASS"] else "pass-no"
-                html += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td><td class='{cls}'>{r[5]}</td></tr>"
-        html += "</table>"
-        st.markdown(html, unsafe_allow_html=True)
+    st.write("---")
 
-    except Exception as e:
-        st.error(f"Error: {e}")
+    # *** GENERATE PDF ***
+    pdf_bytes = create_safe_pdf(data, rows, img_files)
+
+    st.download_button(
+        label="🖨️ Print / Download Report (PDF)",
+        data=pdf_bytes,
+        file_name="Beam_Design_Report.pdf",
+        mime="application/pdf"
+    )
+
+    st.markdown("### Calculation Report")
+    html = "<table class='report-table'>"
+    html += "<tr><th>Item</th><th>Formula / Ref</th><th>Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr>"
+    for r in rows:
+        if r[0] == "SECTION":
+            html += f"<tr class='sec-row'><td colspan='6'>{r[1]}</td></tr>"
+        else:
+            cls = "pass-ok" if r[5] in ["OK", "PASS"] else "pass-no"
+            html += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td><td class='{cls}'>{r[5]}</td></tr>"
+    html += "</table>"
+    st.markdown(html, unsafe_allow_html=True)
+
 else:
     st.info("👈 Please enter parameters and click 'Run Calculation'")
