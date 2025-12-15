@@ -15,28 +15,33 @@ import streamlit.components.v1 as components
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
-# CSS สำหรับปุ่ม Link และตาราง
+# CSS สำหรับปุ่มพิมพ์และตาราง
 st.markdown("""
 <style>
-    .print-btn {
+    .print-btn-container {
+        display: flex; 
+        justify-content: center; 
+        margin: 20px 0;
+    }
+    .print-link {
         background-color: #008CBA;
         border: none;
         color: white !important;
-        padding: 12px 28px;
+        padding: 15px 32px;
         text-align: center;
         text-decoration: none;
         display: inline-block;
         font-size: 18px;
-        margin: 10px 0px;
-        cursor: pointer;
-        border-radius: 5px;
+        border-radius: 8px;
+        font-family: sans-serif;
         font-weight: bold;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-        transition: background-color 0.3s;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: all 0.3s;
     }
-    .print-btn:hover {
-        background-color: #005f7f;
-        color: white !important;
+    .print-link:hover {
+        background-color: #007B9E;
+        box-shadow: 0 6px 8px rgba(0,0,0,0.2);
+        transform: translateY(-2px);
     }
     .report-table {width: 100%; border-collapse: collapse; font-family: sans-serif;}
     .report-table th, .report-table td {border: 1px solid #ddd; padding: 8px; font-size: 14px;}
@@ -48,7 +53,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE
+# 2. DATABASE & HELPER
 # ==========================================
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
@@ -91,7 +96,6 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
     fs = fy
     a = (As_mm2 * fs) / (0.85 * fc * bw) if fc > 0 else 0
     c = a / beta1 if beta1 > 0 else 0
-
     for i in range(50):
         if c <= 0.1: c = 0.1
         eps_t = eps_cu * (d - c) / c
@@ -105,7 +109,6 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
         fs = fs_new;
         a = a_new;
         c = a / beta1
-
     c = a / beta1
     eps_t = eps_cu * (d - c) / c if c > 0 else 0.005
     phi = phiFlexureFromStrain(eps_t)
@@ -176,7 +179,6 @@ def process_calculation(inputs):
         {'key': "R_TOP", 't': "Right (Top)", 'v': inputs['mu_R_n']},
         {'key': "R_BOT", 't': "Right (Bot)", 'v': inputs['mu_R_p']}
     ]
-
     bar_counts = {}
     flex_ok = True
     beta1 = beta1FromFc(fc)
@@ -218,7 +220,6 @@ def process_calculation(inputs):
     req1 = 0.062 * math.sqrt(fc) * bw / fyt
     req2 = 0.35 * bw / fyt
     s_avmin = Av / max(req1, req2)
-
     VuCases = [
         {'key': "V_L", 't': "Left", 'v': inputs['vu_L']},
         {'key': "V_M", 't': "Mid", 'v': inputs['vu_M']},
@@ -228,7 +229,6 @@ def process_calculation(inputs):
     shear_res = {}
     row("Vc", "0.17√fc' bd", "-", f"{fmt(Vc_N / 9806.65, 2)}", "tf", "")
     row("φVc", "0.75 * Vc", "-", f"{fmt(phiVc_N / 9806.65, 2)}", "tf", "")
-
     for case in VuCases:
         loc = case['t']
         Vu_tf = case['v']
@@ -262,7 +262,7 @@ def process_calculation(inputs):
 
 
 # ==========================================
-# 4. PLOTTING & REPORT GEN
+# 4. PLOTTING & REPORT GENERATOR
 # ==========================================
 def fig_to_base64(fig):
     buf = io.BytesIO()
@@ -309,9 +309,7 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
 
 
 def generate_full_html_report(inputs, rows, img_b64_list, auto_print=False):
-    """สร้าง HTML Template พร้อมปุ่มกดในตัว"""
-
-    # 1. Table
+    """สร้าง HTML Template"""
     table_rows = ""
     for r in rows:
         if r[0] == "SECTION":
@@ -329,18 +327,18 @@ def generate_full_html_report(inputs, rows, img_b64_list, auto_print=False):
             </tr>
             """
 
-    # 2. Script: Auto print only if requested
+    # ส่วนนี้สำคัญ: ถ้า auto_print=True (กดปุ่ม) ถึงจะใส่คำสั่งพิมพ์
+    # ถ้าเป็น Preview (auto_print=False) จะไม่ใส่คำสั่งพิมพ์
     print_script = ""
     if auto_print:
         print_script = """
         <script>
             window.onload = function() {
-                setTimeout(function(){ window.print(); }, 800);
+                setTimeout(function(){ window.print(); }, 500);
             }
         </script>
         """
 
-    # 3. HTML Content
     html_content = f"""
     <!DOCTYPE html>
     <html lang="th">
@@ -515,24 +513,24 @@ if st.session_state['calc_done']:
                                f"@{shears['V_R'] / 10:.0f}cm", m_db, s_db, "Right Support", data['mainBar'])
     img3_b64 = fig_to_base64(fig3)
 
-    # 2. GENERATE TWO VERSIONS OF HTML
-    # Version A: Preview (No auto print)
+    # 2. สร้าง HTML 2 แบบ
+    # แบบ A: สำหรับแสดงผลหน้าจอ (Preview) -> ไม่สั่งพิมพ์อัตโนมัติ
     html_preview = generate_full_html_report(data, rows, [img1_b64, img2_b64, img3_b64], auto_print=False)
 
-    # Version B: Link (Auto print)
+    # แบบ B: สำหรับปุ่มพิมพ์ (Link) -> สั่งพิมพ์อัตโนมัติเมื่อเปิด
     html_link = generate_full_html_report(data, rows, [img1_b64, img2_b64, img3_b64], auto_print=True)
 
-    # Encode Version B for Link
+    # Encode Link
     b64_html = base64.b64encode(html_link.encode('utf-8')).decode('utf-8')
     href = f'data:text/html;charset=utf-8;base64,{b64_html}'
 
     # 3. DISPLAY
     st.markdown("### ✅ คำนวณเสร็จสิ้น (Calculation Finished)")
 
-    # PRINT BUTTON (เปิดแท็บใหม่ + สั่งพิมพ์อัตโนมัติ)
+    # ปุ่มพิมพ์แบบ Link (เปิด Tab ใหม่)
     st.markdown(f"""
-        <div style="text-align: center; margin: 20px;">
-            <a href="{href}" target="_blank" class="print-btn">
+        <div class="print-btn-container">
+            <a href="{href}" target="_blank" class="print-link">
                 🖨️ เปิดหน้ารายงานเพื่อพิมพ์ (Open Print Report)
             </a>
         </div>
@@ -540,7 +538,7 @@ if st.session_state['calc_done']:
 
     st.write("---")
 
-    # SHOW PREVIEW (แบบไม่เด้ง Print)
+    # แสดง Preview (ไม่มี auto-print)
     st.subheader("Preview (ตัวอย่างรายงาน)")
     st.components.v1.html(html_preview, height=600, scrolling=True)
 
