@@ -8,34 +8,35 @@ import math
 import numpy as np
 import io
 import base64
+import streamlit.components.v1 as components
 
 # ==========================================
-# 1. CONFIG
+# 1. SETUP & CSS
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
-# CSS สำหรับตกแต่งปุ่ม Link ให้เหมือนปุ่มกด
+# CSS สำหรับปุ่ม Link และตาราง
 st.markdown("""
 <style>
     .print-btn {
         background-color: #008CBA;
         border: none;
         color: white !important;
-        padding: 15px 32px;
+        padding: 12px 28px;
         text-align: center;
         text-decoration: none;
         display: inline-block;
         font-size: 18px;
-        margin: 4px 2px;
+        margin: 10px 0px;
         cursor: pointer;
-        border-radius: 8px;
-        font-family: sans-serif;
+        border-radius: 5px;
         font-weight: bold;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        transition: background-color 0.3s;
     }
     .print-btn:hover {
-        background-color: #007B9E;
-        box-shadow: 0 6px 8px rgba(0,0,0,0.15);
+        background-color: #005f7f;
+        color: white !important;
     }
     .report-table {width: 100%; border-collapse: collapse; font-family: sans-serif;}
     .report-table th, .report-table td {border: 1px solid #ddd; padding: 8px; font-size: 14px;}
@@ -47,7 +48,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE & HELPER
+# 2. DATABASE
 # ==========================================
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
@@ -90,6 +91,7 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
     fs = fy
     a = (As_mm2 * fs) / (0.85 * fc * bw) if fc > 0 else 0
     c = a / beta1 if beta1 > 0 else 0
+
     for i in range(50):
         if c <= 0.1: c = 0.1
         eps_t = eps_cu * (d - c) / c
@@ -103,6 +105,7 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
         fs = fs_new;
         a = a_new;
         c = a / beta1
+
     c = a / beta1
     eps_t = eps_cu * (d - c) / c if c > 0 else 0.005
     phi = phiFlexureFromStrain(eps_t)
@@ -173,6 +176,7 @@ def process_calculation(inputs):
         {'key': "R_TOP", 't': "Right (Top)", 'v': inputs['mu_R_n']},
         {'key': "R_BOT", 't': "Right (Bot)", 'v': inputs['mu_R_p']}
     ]
+
     bar_counts = {}
     flex_ok = True
     beta1 = beta1FromFc(fc)
@@ -214,6 +218,7 @@ def process_calculation(inputs):
     req1 = 0.062 * math.sqrt(fc) * bw / fyt
     req2 = 0.35 * bw / fyt
     s_avmin = Av / max(req1, req2)
+
     VuCases = [
         {'key': "V_L", 't': "Left", 'v': inputs['vu_L']},
         {'key': "V_M", 't': "Mid", 'v': inputs['vu_M']},
@@ -223,6 +228,7 @@ def process_calculation(inputs):
     shear_res = {}
     row("Vc", "0.17√fc' bd", "-", f"{fmt(Vc_N / 9806.65, 2)}", "tf", "")
     row("φVc", "0.75 * Vc", "-", f"{fmt(phiVc_N / 9806.65, 2)}", "tf", "")
+
     for case in VuCases:
         loc = case['t']
         Vu_tf = case['v']
@@ -256,7 +262,7 @@ def process_calculation(inputs):
 
 
 # ==========================================
-# 4. PLOTTING & REPORT GENERATOR
+# 4. PLOTTING & REPORT GEN
 # ==========================================
 def fig_to_base64(fig):
     buf = io.BytesIO()
@@ -302,10 +308,10 @@ def create_beam_section(b, h, cover, top_n, bot_n, stir_txt, m_db, s_db, title, 
     return fig
 
 
-def generate_full_html_report(inputs, rows, img_b64_list):
-    """สร้าง HTML เต็มรูปแบบพร้อมสั่งพิมพ์อัตโนมัติ"""
+def generate_full_html_report(inputs, rows, img_b64_list, auto_print=False):
+    """สร้าง HTML Template พร้อมปุ่มกดในตัว"""
 
-    # สร้างตาราง
+    # 1. Table
     table_rows = ""
     for r in rows:
         if r[0] == "SECTION":
@@ -323,7 +329,18 @@ def generate_full_html_report(inputs, rows, img_b64_list):
             </tr>
             """
 
-    # HTML Template (Google Font: Sarabun รองรับภาษาไทย 100%)
+    # 2. Script: Auto print only if requested
+    print_script = ""
+    if auto_print:
+        print_script = """
+        <script>
+            window.onload = function() {
+                setTimeout(function(){ window.print(); }, 800);
+            }
+        </script>
+        """
+
+    # 3. HTML Content
     html_content = f"""
     <!DOCTYPE html>
     <html lang="th">
@@ -347,12 +364,21 @@ def generate_full_html_report(inputs, rows, img_b64_list):
             .pass-no {{ color: red; font-weight: bold; text-align: center; }}
 
             @media print {{
+                .no-print {{ display: none !important; }}
                 body {{ padding: 0; }}
-                .no-print {{ display: none; }}
+            }}
+            .print-btn-internal {{
+                background-color: #4CAF50; color: white; padding: 10px 20px;
+                border: none; border-radius: 5px; cursor: pointer; font-size: 16px;
+                margin-bottom: 20px;
             }}
         </style>
     </head>
     <body>
+        <div class="no-print" style="text-align: center;">
+            <button onclick="window.print()" class="print-btn-internal">🖨️ Print This Page / พิมพ์หน้านี้</button>
+        </div>
+
         <div class="header">
             <h1>ENGINEERING DESIGN REPORT</h1>
             <h3>Reinforced Concrete Beam Design (ACI 318-19)</h3>
@@ -394,11 +420,7 @@ def generate_full_html_report(inputs, rows, img_b64_list):
             </tbody>
         </table>
 
-        <script>
-            window.onload = function() {{
-                window.print();
-            }}
-        </script>
+        {print_script}
     </body>
     </html>
     """
@@ -480,7 +502,7 @@ if st.session_state['calc_done']:
     m_db = BAR_INFO[data['mainBar']]['d_mm']
     s_db = BAR_INFO[data['stirrupBar']]['d_mm']
 
-    # 1. GRAPHICS GENERATION
+    # 1. GRAPHICS
     fig1 = create_beam_section(data['b'], data['h'], data['cover'], bars.get('L_TOP', 2), bars.get('L_BOT', 2),
                                f"@{shears['V_L'] / 10:.0f}cm", m_db, s_db, "Left Support", data['mainBar'])
     img1_b64 = fig_to_base64(fig1)
@@ -493,18 +515,21 @@ if st.session_state['calc_done']:
                                f"@{shears['V_R'] / 10:.0f}cm", m_db, s_db, "Right Support", data['mainBar'])
     img3_b64 = fig_to_base64(fig3)
 
-    # 2. GENERATE HTML
-    html_report = generate_full_html_report(data, rows, [img1_b64, img2_b64, img3_b64])
+    # 2. GENERATE TWO VERSIONS OF HTML
+    # Version A: Preview (No auto print)
+    html_preview = generate_full_html_report(data, rows, [img1_b64, img2_b64, img3_b64], auto_print=False)
 
-    # Encode HTML to Base64 for Link
-    b64_html = base64.b64encode(html_report.encode('utf-8')).decode('utf-8')
+    # Version B: Link (Auto print)
+    html_link = generate_full_html_report(data, rows, [img1_b64, img2_b64, img3_b64], auto_print=True)
+
+    # Encode Version B for Link
+    b64_html = base64.b64encode(html_link.encode('utf-8')).decode('utf-8')
     href = f'data:text/html;charset=utf-8;base64,{b64_html}'
 
-    # 3. SHOW ON SCREEN
+    # 3. DISPLAY
     st.markdown("### ✅ คำนวณเสร็จสิ้น (Calculation Finished)")
 
-    # --- PRINT BUTTON (LINK STYLE) ---
-    # ใช้ Link <a> เพื่อเปิด Tab ใหม่ -> เป็นวิธีที่เสถียรที่สุดใน Streamlit
+    # PRINT BUTTON (เปิดแท็บใหม่ + สั่งพิมพ์อัตโนมัติ)
     st.markdown(f"""
         <div style="text-align: center; margin: 20px;">
             <a href="{href}" target="_blank" class="print-btn">
@@ -514,8 +539,10 @@ if st.session_state['calc_done']:
     """, unsafe_allow_html=True)
 
     st.write("---")
+
+    # SHOW PREVIEW (แบบไม่เด้ง Print)
     st.subheader("Preview (ตัวอย่างรายงาน)")
-    st.components.v1.html(html_report, height=600, scrolling=True)
+    st.components.v1.html(html_preview, height=600, scrolling=True)
 
 else:
     st.info("👈 กรุณากรอกข้อมูลทางด้านซ้าย แล้วกดปุ่ม 'Run Calculation'")
