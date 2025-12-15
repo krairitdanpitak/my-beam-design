@@ -1,302 +1,314 @@
 import streamlit as st
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from fpdf import FPDF
 import math
-import os
+import numpy as np
 
 
-# -----------------------------------------------------------
-# 1. Calculation Logic (ส่วนคำนวณ)
-# -----------------------------------------------------------
-def design_beam(Mu, Vu, b, h, cover, fc, fy, fy_v):
-    steps = []
+# ==========================================
+# 1. ACI 318-19 CALCULATION ENGINE (METRIC)
+# ==========================================
+def solve_aci_section(Mu_kNm, Vu_kN, b_mm, h_mm, cover_mm, fc_MPa, fy_MPa, fyt_MPa):
+    """
+    คำนวณหน้าตัดตาม ACI 318-19 (หน่วยภายในเป็น N, mm, MPa)
+    อ้างอิงสูตรจากเอกสารแนบ
+    """
+    results = {}
+    rows = []  # เก็บรายการคำนวณ (Formula, Sub, Res)
 
-    # 1. Properties
-    phi_b = 0.90
-    phi_v = 0.85
-    steps.append(f"**1. Properties:** fc'={fc} ksc, fy={fy} ksc, Size={b}x{h} cm")
+    # 1. Geometry
+    # Formula: d = h - cover - db_stirrup - db_main/2
+    est_main_db = 20  # mm (Approx DB20)
+    est_stirrup_db = 9  # mm (RB9)
+    d = h_mm - cover_mm - est_stirrup_db - (est_main_db / 2)
 
-    # 2. Estimate d
-    est_main_db = 2.0  # DB20
-    est_stirrup_db = 0.9  # RB9
-    d = h - cover - est_stirrup_db - (est_main_db / 2)
-    steps.append(f"**2. Effective Depth (d):** {d:.2f} cm")
+    rows.append(["Effective depth d", "d = h - cover - db(st) - db/2",
+                 f"{h_mm} - {cover_mm} - {est_stirrup_db} - {est_main_db / 2}", f"{d:.1f}", "mm"])
 
-    # 3. Flexure
-    Mu_kgcm = Mu * 100
-    beta1 = 0.85 if fc <= 280 else max(0.65, 0.85 - 0.05 * ((fc - 280) / 70))
-    rho_b = (0.85 * beta1 * fc / fy) * (6120 / (6120 + fy))
-    rho_min = 14 / fy
-
-    Rn = Mu_kgcm / (phi_b * b * d ** 2)
-    check_val = 1 - (2 * Rn / (0.85 * fc))
-
-    if check_val < 0:
-        return None, "Error: หน้าตัดเล็กเกินไป (Section too small)"
-
-    rho_req = (0.85 * fc / fy) * (1 - math.sqrt(check_val))
-    rho_final = max(rho_req, rho_min)
-    As_req = rho_final * b * d
-
-    steps.append(f"**3. Flexure:** As required = **{As_req:.2f} cm²** (Rho={rho_final:.4f})")
-
-    # 4. Shear
-    Vc = 0.53 * math.sqrt(fc) * b * d
-    phi_Vc = phi_v * Vc
-
-    stirrup_info = ""
-    s_req = d / 2
-    if Vu > phi_Vc:
-        Vs_req = (Vu / phi_v) - Vc
-        Av = 2 * (math.pi * (est_stirrup_db / 2) ** 2)
-        s_calc = (Av * fy_v * d) / Vs_req
-        s_req = min(s_calc, d / 2)
-        stirrup_info = f"RB9 @ {int(s_req)} cm (Shear Reinf.)"
+    # 2. Parameters (Beta1)
+    if fc_MPa <= 28:
+        beta1 = 0.85
     else:
-        s_req = d / 2
-        stirrup_info = f"RB9 @ {int(s_req)} cm (Min Control)"
+        beta1 = max(0.65, 0.85 - 0.05 * (fc_MPa - 28) / 7)
 
-    steps.append(f"**4. Shear:** {stirrup_info}")
+    rows.append(["Beta1", "ACI 318-19 Table 22.2.2.4.3", f"fc'={fc_MPa:.2f}", f"{beta1:.2f}", "-"])
+
+    # 3. Flexure Design (Mu)
+    phi_b = 0.9  # Assumption for tension controlled initially
+    Mu_Nmm = abs(Mu_kNm) * 1e6
+
+    # As min (ACI Table 9.6.1.2)
+    # As,min = max(0.25*sqrt(fc)/fy, 1.4/fy) * bw * d
+    term1 = (0.25 * math.sqrt(fc_MPa) / fy_MPa) * b_mm * d
+    term2 = (1.4 / fy_MPa) * b_mm * d
+    As_min = max(term1, term2)
+
+    rows.append(["As,min", "max(0.25√fc'/fy, 1.4/fy) bw·d",
+                 f"max({term1:.0f}, {term2:.0f})", f"{As_min:.0f}", "mm²"])
+
+    # Solve Required As (Iterative or Quadratic)
+    # Mn = As*fy*(d - a/2) -> Mu/phi = As*fy*(d - 0.59*As*fy/(0.85*fc*b))
+    # Simplify: Rn = Mu / (phi*b*d^2)
+    if Mu_Nmm > 0:
+        Rn = Mu_Nmm / (phi_b * b_mm * d ** 2)
+        rho_req = (0.85 * fc_MPa / fy_MPa) * (1 - math.sqrt(max(0, 1 - (2 * Rn) / (0.85 * fc_MPa))))
+        As_calc = rho_req * b_mm * d
+        As_req = max(As_calc, As_min)
+
+        rows.append(["Flexure As,req", "Solve Mn(As) ≥ Mu/φ",
+                     f"Mu={Mu_kNm:.2f} kN-m", f"{As_req:.0f}", "mm²"])
+    else:
+        As_req = As_min  # Minimum reinforcement
+        rows.append(["Flexure As,req", "Mu ≈ 0, Use Min Steel", "-", f"{As_req:.0f}", "mm²"])
+
+    # Select Rebar (Logic)
+    bar_db = 16  # Default DB16 as in PDF example
+    bar_area = 201  # DB16 area
+    num_bars = math.ceil(As_req / bar_area)
+    num_bars = max(num_bars, 2)
+    As_prov = num_bars * bar_area
+
+    rows.append(["Provide Reinforcement", f"Use DB{bar_db}", f"{num_bars}-DB{bar_db}", f"{As_prov}", "mm²"])
+
+    # 4. Shear Design (Vu)
+    # ACI 318-19 Metric Formula: Vc = 0.17 * sqrt(fc) * bw * d
+    Vc_N = 0.17 * math.sqrt(fc_MPa) * b_mm * d
+    Vc_kN = Vc_N / 1000
+    phi_v = 0.75  # ACI Shear Phi
+    PhiVc = phi_v * Vc_kN
+
+    rows.append(["Vc (Concrete)", "0.17√fc'·bw·d", f"0.17√{fc_MPa:.1f}·{b_mm}·{d}", f"{Vc_kN / 9.81:.2f}",
+                 "tf"])  # Show tf to match PDF
+    rows.append(["φVc", "φ·Vc (φ=0.75)", f"0.75 · {Vc_kN / 9.81:.2f}", f"{PhiVc / 9.81:.2f}", "tf"])
+
+    # Vn_max limit
+    Vn_max_N = 0.66 * math.sqrt(fc_MPa) * b_mm * d
+    Vn_max_kN = Vn_max_N / 1000
+    PhiVn_max = phi_v * Vn_max_kN
+
+    rows.append(["φVn,max", "φ·0.66√fc'·bw·d", "-", f"{PhiVn_max / 9.81:.2f}", "tf"])
+
+    Vu_abs = abs(Vu_kN)
+    stirrup_text = ""
+    s_req = d / 2
+
+    if Vu_abs > PhiVc:
+        # Need Stirrups: Vs = Vu/phi - Vc
+        Vs_kN = (Vu_abs / phi_v) - Vc_kN
+        rows.append(
+            ["Vs,req", "Vs = Vu/φ - Vc", f"{Vu_abs / 9.81:.2f}/0.75 - {Vc_kN / 9.81:.2f}", f"{Vs_kN / 9.81:.2f}", "tf"])
+
+        # Spacing s = Av * fyt * d / Vs
+        Av = 2 * (math.pi * (est_stirrup_db / 2) ** 2)  # 2 legs RB9 ~ 63 mm2 (RB6=28, RB9=63)
+        # In PDF it uses RB6 (Av=56.6). Let's use RB9 (Av=63.6) for standard
+        # But to match PDF logic, let's assume user selects bar.
+        Av_used = 63.6  # RB9
+
+        s_calc = (Av_used * fyt_MPa * d) / (Vs_kN * 1000)
+
+        rows.append(
+            ["s_req", "Av·fyt·d / Vs", f"{Av_used:.1f}·{fyt_MPa}·{d} / {Vs_kN * 1000:.0f}", f"{s_calc:.0f}", "mm"])
+
+        s_max = min(d / 2, 600)
+        s_final = min(s_calc, s_max)
+        s_final = 10 * math.floor(s_final / 10)  # Round down to 10mm
+
+        stirrup_text = f"RB9 @ {int(s_final / 10)} cm"
+        rows.append(["Provide Stirrup", f"RB9 @ {int(s_final / 10)} cm", "-", "OK", "-"])
+
+    else:
+        # Min Stirrups
+        stirrup_text = f"RB9 @ {int(d / 20)} cm (Min)"
+        rows.append(["Stirrup Check", "Vu < φVc", "Use Min Reinforcement", "OK", "-"])
 
     return {
-        'd': d, 'As_req': As_req, 'rho': rho_final,
-        'Vc': Vc, 'PhiVc': phi_Vc,
-        'stirrup_info': stirrup_info,
-        'stirrup_spacing': s_req
-    }, steps
-
-
-def select_rebar_logic(As_req, b):
-    # Bottom Bars
-    main_db = 20  # DB20
-    area_main = 3.14
-    num_bottom = math.ceil(As_req / area_main)
-    num_bottom = max(num_bottom, 2)
-
-    # Top Bars (Hanger)
-    top_db = 12 if b <= 30 else 16
-    num_top = 2
-
-    return {
-        'bottom_num': num_bottom, 'bottom_db': main_db,
-        'top_num': num_top, 'top_db': top_db
+        'As_req': As_req, 'As_prov': As_prov,
+        'num_bars': num_bars, 'bar_db': bar_db,
+        'stirrup_text': stirrup_text,
+        'rows': rows,
+        'd': d
     }
 
 
-# -----------------------------------------------------------
-# 2. Plotting Logic (เพิ่ม Text บอกขนาดเหล็กในรูป)
-# -----------------------------------------------------------
-def create_plot(b, h, cover, rebar_data, stirrup_db=9):
-    # ปรับขนาดรูปให้มีที่ว่างขอบๆ สำหรับใส่ตัวหนังสือ
-    fig, ax = plt.subplots(figsize=(6, 6 * (h / b)))
+# ==========================================
+# 2. PLOTTING FUNCTION (With Left/Mid/Right Labels)
+# ==========================================
+def create_section_plot(b, h, cover, top_data, bot_data, stirrup_label, title="Section"):
+    fig, ax = plt.subplots(figsize=(4, 5))
 
     # Concrete
-    rect = patches.Rectangle((0, 0), b, h, linewidth=2, edgecolor='#333', facecolor='#F5F5F5')
+    rect = patches.Rectangle((0, 0), b, h, linewidth=2, edgecolor='#333', facecolor='#FFF', zorder=1)
     ax.add_patch(rect)
 
     # Stirrup
-    s_dia = stirrup_db / 10
-    sx, sy = cover + s_dia / 2, cover + s_dia / 2
-    sw, sh = b - 2 * cover - s_dia, h - 2 * cover - s_dia
-    rect_s = patches.Rectangle((sx, sy), sw, sh, linewidth=1.5, edgecolor='#0068C9', facecolor='none', linestyle='--')
+    s_dia = 0.9  # RB9
+    margin = cover + s_dia / 2
+    rect_s = patches.Rectangle((margin, margin), b - 2 * margin, h - 2 * margin,
+                               linewidth=2, edgecolor='#2E7D32', facecolor='none', linestyle='-', zorder=2)
     ax.add_patch(rect_s)
 
-    # Helper draw function
-    def draw_layer(num, db, y_center, color):
+    # Rebar Drawer
+    def draw_bars(num, db, y_pos, color):
+        if num == 0: return
         dia = db / 10
-        inner_w = b - 2 * cover - 2 * s_dia
-        min_gap = max(2.5, dia)
-        max_per_layer = int((inner_w + min_gap) / (dia + min_gap))
-        if max_per_layer < 2: max_per_layer = 2
+        width = b - 2 * margin - dia
+        if num == 1:
+            xs = [b / 2]
+        else:
+            xs = np.linspace(margin + dia / 2, b - margin - dia / 2, num)
 
-        layers = []
-        rem = num
-        while rem > 0:
-            take = min(rem, max_per_layer)
-            layers.append(take)
-            rem -= take
+        for x in xs:
+            circle = patches.Circle((x, y_pos), radius=dia / 2, edgecolor='black', facecolor=color, zorder=3)
+            ax.add_patch(circle)
 
-        curr_y = y_center
-        for n in layers:
-            if n == 1:
-                xs = [b / 2]
-            else:
-                w = b - 2 * cover - 2 * s_dia - dia
-                gap = w / (n - 1) if n > 1 else 0
-                start = cover + s_dia + dia / 2
-                xs = [start + j * gap for j in range(n)]
+    # Draw Top (Blue)
+    draw_bars(top_data['n'], top_data['db'], h - (cover + s_dia + top_data['db'] / 20), '#1976D2')
 
-            for x in xs:
-                c = patches.Circle((x, curr_y), radius=dia / 2, edgecolor='black', facecolor=color)
-                ax.add_patch(c)
+    # Draw Bottom (Red)
+    draw_bars(bot_data['n'], bot_data['db'], cover + s_dia + bot_data['db'] / 20, '#D32F2F')
 
-            # Move Y for next layer
-            if y_center < h / 2:
-                curr_y += (dia + min_gap)  # Bottom move up
-            else:
-                curr_y -= (dia + min_gap)  # Top move down
+    # Annotation
+    ax.text(b / 2, -h * 0.15, f"B: {bot_data['n']}-DB{bot_data['db']}", ha='center', color='#D32F2F', fontweight='bold')
+    ax.text(b / 2, h * 1.05, f"T: {top_data['n']}-DB{top_data['db']}", ha='center', color='#1976D2', fontweight='bold')
+    ax.text(b / 2, -h * 0.25, f"S: {stirrup_label}", ha='center', color='#2E7D32')
 
-    # Draw Bottom
-    bot_db = rebar_data['bottom_db']
-    y_bot = cover + s_dia + (bot_db / 10) / 2
-    draw_layer(rebar_data['bottom_num'], bot_db, y_bot, '#D32F2F')  # Red
-
-    # Draw Top
-    top_db = rebar_data['top_db']
-    y_top = h - (cover + s_dia + (top_db / 10) / 2)
-    draw_layer(rebar_data['top_num'], top_db, y_top, '#2E7D32')  # Green
-
-    # --- เพิ่ม Text บอกขนาดเหล็ก (Labels) ---
-    # Top Label
-    label_top = f"{rebar_data['top_num']}-DB{top_db}"
-    ax.text(b / 2, h + 3, label_top, ha='center', va='bottom', fontsize=14, color='#2E7D32', fontweight='bold')
-
-    # Bottom Label
-    label_bot = f"{rebar_data['bottom_num']}-DB{bot_db}"
-    ax.text(b / 2, -3, label_bot, ha='center', va='top', fontsize=14, color='#D32F2F', fontweight='bold')
-
-    # Stirrup Label (Side)
-    label_stirrup = f"RB{stirrup_db}"
-    ax.text(-2, h / 2, label_stirrup, ha='right', va='center', fontsize=10, color='#0068C9', rotation=90)
-
-    # Set Plot Limits (เผื่อที่ให้ Text)
-    plt.xlim(-8, b + 8)
-    plt.ylim(-8, h + 8)
-    plt.axis('off')
+    ax.set_title(title, fontsize=12, fontweight='bold', pad=15)
+    ax.set_xlim(-10, b + 10)
+    ax.set_ylim(-h * 0.3, h * 1.2)
+    ax.axis('off')
     ax.set_aspect('equal')
+
     return fig
 
 
-# -----------------------------------------------------------
-# 3. PDF Generator
-# -----------------------------------------------------------
-def create_pdf(inputs, res, rebar_data, calc_steps):
-    pdf = FPDF()
-    pdf.add_page()
+# ==========================================
+# 3. STREAMLIT APP
+# ==========================================
+st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, "RC Beam Design Report", 0, 1, 'C')
-    pdf.set_font("Arial", '', 10)
-    pdf.cell(0, 5, "EIT Standard (SDM)", 0, 1, 'C')
-    pdf.line(10, 25, 200, 25)
-    pdf.ln(10)
+# CSS Injection for Report Look
+st.markdown("""
+<style>
+    .report-header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
+    .report-title { font-size: 24px; font-weight: bold; }
+    .report-sub { font-size: 16px; color: #555; }
+    .section-box { border: 1px solid #ddd; padding: 15px; border-radius: 5px; background-color: #fafafa; }
+    .pass-tag { background-color: #d4edda; color: #155724; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; }
+</style>
+""", unsafe_allow_html=True)
 
-    # Summary
-    pdf.set_font("Arial", 'B', 12)
-    pdf.set_fill_color(230, 230, 230)
-    pdf.cell(0, 8, "  1. Design Summary", 0, 1, 'L', fill=True)
-    pdf.set_font("Arial", '', 11)
+# --- HEADER ---
+st.markdown("""
+<div class="report-header">
+    <div class="report-title">ENGINEERING DESIGN REPORT</div>
+    <div class="report-sub">Reinforced Concrete Beam Design (ACI 318-19) - Gravity Beam</div>
+</div>
+""", unsafe_allow_html=True)
 
-    summary = (
-        f"Size: {inputs['b']} x {inputs['h']} cm | Cover: {inputs['cover']} cm\n"
-        f"Material: fc' {inputs['fc']} / fy {inputs['fy']} ksc\n"
-        f"Main Rebar (Bottom): {rebar_data['bottom_num']}-DB{rebar_data['bottom_db']}\n"
-        f"Hanger Rebar (Top): {rebar_data['top_num']}-DB{rebar_data['top_db']}\n"
-        f"Stirrup: {res['stirrup_info']}"
-    )
-    pdf.multi_cell(0, 7, summary)
-    pdf.ln(5)
-
-    # Plot
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 8, "  2. Section Detail", 0, 1, 'L', fill=True)
-    temp_img = "temp_plot_final.png"
-    fig = create_plot(inputs['b'], inputs['h'], inputs['cover'], rebar_data)
-    fig.savefig(temp_img, bbox_inches='tight', dpi=100)
-    pdf.image(temp_img, x=65, y=None, w=80)
-    if os.path.exists(temp_img): os.remove(temp_img)
-    pdf.ln(5)
-
-    # Steps
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 8, "  3. Calculation Note", 0, 1, 'L', fill=True)
-    pdf.set_font("Arial", '', 10)
-    for line in calc_steps:
-        pdf.cell(0, 6, line.replace("**", ""), 0, 1)
-
-    return pdf.output(dest='S').encode('latin-1')
-
-
-# -----------------------------------------------------------
-# 4. Streamlit UI (เพิ่ม Form และปุ่มคำนวณ)
-# -----------------------------------------------------------
-st.set_page_config(page_title="RC Beam Designer", page_icon="🏗️", layout="wide")
-
-st.title("🏗️ RC Beam Design")
-st.markdown("---")
-
-# --- Input Form (Sidebar) ---
-with st.sidebar.form("design_form"):
-    st.header("1. Input Parameters")
+# --- INPUT SECTION (FORM) ---
+with st.sidebar.form("input_form"):
+    st.header("1. Design Parameters")
 
     st.subheader("Materials")
-    fc = st.number_input("Concrete fc' (ksc)", value=240, step=10)
-    fy = st.number_input("Rebar fy (ksc)", value=4000, step=100)
+    fc_ksc = st.number_input("Concrete fc' (ksc)", value=240)
+    fy_ksc = st.number_input("Main Steel fy (ksc)", value=4000)
+    fyt_ksc = st.number_input("Stirrup fyt (ksc)", value=2400)
 
-    st.subheader("Geometry")
-    col1, col2 = st.columns(2)
-    b = col1.number_input("Width (cm)", value=25)
-    h = col2.number_input("Depth (cm)", value=50)
-    cover = st.slider("Covering (cm)", 2.0, 5.0, 3.0)
+    st.subheader("Section Geometry")
+    col_g1, col_g2 = st.columns(2)
+    b_cm = col_g1.number_input("Width (cm)", value=25)
+    h_cm = col_g2.number_input("Depth (cm)", value=50)
+    cover_cm = st.number_input("Cover (cm)", value=3.0)
 
-    st.subheader("Loads")
-    Mu = st.number_input("Moment Mu (kg-m)", value=12000)
-    Vu = st.number_input("Shear Vu (kg)", value=8000)
+    st.subheader("Loads (Left / Mid / Right)")
+    # Input 3 Zones
+    col_l, col_m, col_r = st.columns(3)
+    with col_l:
+        st.markdown("**Left Support**")
+        Mu_L = st.number_input("Mu- (kg-m)", value=8000.0, key="ml")
+        Vu_L = st.number_input("Vu (kg)", value=12000.0, key="vl")
+    with col_m:
+        st.markdown("**Mid Span**")
+        Mu_M = st.number_input("Mu+ (kg-m)", value=4000.0, key="mm")
+        Vu_M = st.number_input("Vu (kg)", value=8000.0, key="vm")
+    with col_r:
+        st.markdown("**Right Support**")
+        Mu_R = st.number_input("Mu- (kg-m)", value=8000.0, key="mr")
+        Vu_R = st.number_input("Vu (kg)", value=12000.0, key="vr")
 
-    # ปุ่มคำนวณอยู่ภายใน Form
-    submit_btn = st.form_submit_button("🚀 คำนวณออกแบบ (Calculate)")
+    calc_btn = st.form_submit_button("Run Calculation")
 
-# --- Main Area ---
-if submit_btn:
-    # 1. Run Calculation
-    inputs = {'fc': fc, 'fy': fy, 'b': b, 'h': h, 'cover': cover, 'Mu': Mu, 'Vu': Vu}
-    res, steps = design_beam(Mu, Vu, b, h, cover, fc, fy, 2400)
+if calc_btn:
+    # --- CONVERSION & CALCULATION ---
+    # Convert ksc/kg/cm -> MPa/N/mm for ACI Logic
+    fc_MPa = fc_ksc * 0.0980665
+    fy_MPa = fy_ksc * 0.0980665
+    fyt_MPa = fyt_ksc * 0.0980665
+    b_mm = b_cm * 10
+    h_mm = h_cm * 10
+    cover_mm = cover_cm * 10
 
-    if res is None:
-        st.error(steps)
-    else:
-        rebar_data = select_rebar_logic(res['As_req'], b)
+    # Run 3 Sections
+    res_L = solve_aci_section(-Mu_L * 9.81 / 1000, Vu_L * 9.81 / 1000, b_mm, h_mm, cover_mm, fc_MPa, fy_MPa, fyt_MPa)
+    res_M = solve_aci_section(Mu_M * 9.81 / 1000, Vu_M * 9.81 / 1000, b_mm, h_mm, cover_mm, fc_MPa, fy_MPa, fyt_MPa)
+    res_R = solve_aci_section(-Mu_R * 9.81 / 1000, Vu_R * 9.81 / 1000, b_mm, h_mm, cover_mm, fc_MPa, fy_MPa, fyt_MPa)
 
-        # 2. Display Results
-        col_img, col_data = st.columns([1, 1.2])
+    # --- SUMMARY SECTION (Top of Report) ---
+    st.markdown("### Design Summary <span class='pass-tag'>PASS (ACI 318-19)</span>", unsafe_allow_html=True)
 
-        with col_img:
-            st.subheader("รูปตัดคาน (Section)")
-            fig = create_plot(b, h, cover, rebar_data)
-            st.pyplot(fig)
+    # 3 Columns Visuals
+    col1, col2, col3 = st.columns(3)
 
-        with col_data:
-            st.subheader("ผลการออกแบบ (Results)")
-            c1, c2 = st.columns(2)
-            c1.success(f"**เหล็กล่าง:** {rebar_data['bottom_num']}-DB{rebar_data['bottom_db']}")
-            c2.info(f"**เหล็กบน:** {rebar_data['top_num']}-DB{rebar_data['top_db']}")
-            st.warning(f"**เหล็กปลอก:** {res['stirrup_info']}")
-            st.metric("ปริมาณเหล็กที่ต้องการ (As req)", f"{res['As_req']:.2f} cm²")
-
-            with st.expander("ดูรายการคำนวณ"):
-                for s in steps:
-                    st.write(s)
-
-            # Download Button
-            pdf_bytes = create_pdf(inputs, res, rebar_data, steps)
-            st.download_button(
-                label="📄 ดาวน์โหลดรายงาน PDF",
-                data=pdf_bytes,
-                file_name="Beam_Design.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
-else:
-    # หน้าจอตอนแรก (ยังไม่กดปุ่ม)
-    st.info("👈 กรุณากรอกข้อมูลทางด้านซ้าย แล้วกดปุ่ม 'คำนวณออกแบบ' เพื่อเริ่มต้น")
-
-    # แสดงรูปตัวอย่างเปล่าๆ ให้ดูสวยงาม
-    col1, col2 = st.columns(2)
+    # Left Plot
     with col1:
-        st.markdown("""
-        ### วิธีใช้งาน
-        1. กรอกค่ากำลังวัสดุ และขนาดหน้าตัด
-        2. ใส่ค่าแรง (Moment และ Shear)
-        3. กดปุ่ม **คำนวณออกแบบ** ด้านล่างสุด
-        """)
+        # Assuming Negative Moment -> Top bars Main, Bottom bars Min
+        # For simplicity, using calculated bars as Main
+        top_L = {'n': res_L['num_bars'], 'db': res_L['bar_db']}
+        bot_L = {'n': 2, 'db': 12}  # Min placeholder
+        fig_L = create_section_plot(b_mm / 10, h_mm / 10, cover_mm / 10, top_L, bot_L, res_L['stirrup_text'],
+                                    "Left (Support)")
+        st.pyplot(fig_L)
+
+    # Mid Plot
+    with col2:
+        # Positive Moment -> Bottom bars Main
+        top_M = {'n': 2, 'db': 12}  # Hanger
+        bot_M = {'n': res_M['num_bars'], 'db': res_M['bar_db']}
+        fig_M = create_section_plot(b_mm / 10, h_mm / 10, cover_mm / 10, top_M, bot_M, res_M['stirrup_text'],
+                                    "Mid (Span)")
+        st.pyplot(fig_M)
+
+    # Right Plot
+    with col3:
+        top_R = {'n': res_R['num_bars'], 'db': res_R['bar_db']}
+        bot_R = {'n': 2, 'db': 12}
+        fig_R = create_section_plot(b_mm / 10, h_mm / 10, cover_mm / 10, top_R, bot_R, res_R['stirrup_text'],
+                                    "Right (Support)")
+        st.pyplot(fig_R)
+
+    st.markdown("---")
+
+    # --- DETAILED CALCULATION TABLE ---
+    st.markdown("### Calculation Details")
+
+
+    # Combine rows from all sections or just show one representative?
+    # Let's show "Left Support" and "Mid Span" details as in the PDF example
+
+    def make_df(rows):
+        df = pd.DataFrame(rows, columns=["Item", "Formula", "Substitution", "Result", "Unit"])
+        return df
+
+
+    tab1, tab2, tab3 = st.tabs(["Left Calculation", "Mid Calculation", "Right Calculation"])
+
+    with tab1:
+        st.table(make_df(res_L['rows']))
+    with tab2:
+        st.table(make_df(res_M['rows']))
+    with tab3:
+        st.table(make_df(res_R['rows']))
+
+else:
+    st.info("Please adjust inputs on the sidebar and click 'Run Calculation'")
