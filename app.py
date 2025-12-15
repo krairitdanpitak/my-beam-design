@@ -11,19 +11,20 @@ import requests
 from fpdf import FPDF
 
 # ==========================================
-# 1. SETUP & ROBUST FONT LOADER
+# 1. SETUP & FONT LOADER (CRITICAL FIX)
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
 
-def check_font():
-    """ดาวน์โหลดฟอนต์ THSarabunNew (มี Link สำรอง)"""
+def get_font_path():
+    """ดาวน์โหลดฟอนต์และคืนค่า path"""
     font_name = "THSarabunNew.ttf"
 
-    # ถ้ามีไฟล์แล้ว ไม่ต้องโหลดใหม่
-    if os.path.exists(font_name) and os.path.getsize(font_name) > 1000:
+    # ถ้ามีไฟล์แล้วและขนาดถูกต้อง (ไม่เป็นไฟล์เสีย) ให้ใช้ได้เลย
+    if os.path.exists(font_name) and os.path.getsize(font_name) > 50000:
         return font_name
 
+    # ลิงก์สำรองหลายทางเลือก
     urls = [
         "https://github.com/nutjunkie/thaifonts/raw/master/THSarabunNew.ttf",
         "https://raw.githubusercontent.com/fpdf2/fpdf2/master/test/fonts/THSarabunNew.ttf"
@@ -42,8 +43,11 @@ def check_font():
     return None
 
 
+# โหลดฟอนต์ตั้งแต่เริ่มโปรแกรม
+font_path = get_font_path()
+
 # ==========================================
-# 2. DATABASE & HELPER
+# 2. DATABASE
 # ==========================================
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
@@ -59,7 +63,6 @@ BAR_INFO = {
 
 def fmt(n, digits=3):
     try:
-        if n is None: return "-"
         val = float(n)
         if math.isnan(val): return "-"
         return f"{val:,.{digits}f}"
@@ -109,7 +112,6 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
     T = As_mm2 * fs
     Mn = T * (d - a / 2.0)
     phiMn = phi * Mn
-
     return {'phi': phi, 'phiMn': phiMn, 'eps_t': eps_t}
 
 
@@ -167,7 +169,6 @@ def process_calculation(inputs):
     row("As,min", "max(0.25√fc'/fy, 1.4/fy)bd", "-", f"{fmt(As_min, 0)}", "mm²")
 
     sec("2. FLEXURE DESIGN")
-    # ใช้ชื่อสั้นลงเพื่อป้องกันตารางล้น
     MuCases = [
         {'key': "L_TOP", 't': "Left (Top)", 'v': inputs['mu_L_n']},
         {'key': "L_BOT", 't': "Left (Bot)", 'v': inputs['mu_L_p']},
@@ -179,8 +180,6 @@ def process_calculation(inputs):
 
     bar_counts = {}
     flex_ok = True
-
-    # คำนวณ As Max
     beta1 = beta1FromFc(fc)
     Es = 200000
     eps_cu = 0.003
@@ -238,7 +237,6 @@ def process_calculation(inputs):
     ]
     shear_ok = True
     shear_res = {}
-
     row("Vc", "0.17√fc' bd", "-", f"{fmt(Vc_N / 9806.65, 2)}", "tf", "")
     row("φVc", "0.75 * Vc", "-", f"{fmt(phiVc_N / 9806.65, 2)}", "tf", "")
 
@@ -263,49 +261,46 @@ def process_calculation(inputs):
         passStr = Vu_N <= phiVn + 1
         if not passStr: shear_ok = False
         shear_res[case['key']] = s_sel
-
         row(f"{loc} Vu", "-", "-", f"{fmt(Vu_tf, 3)}", "tf", "")
         status_shear = "OK" if passStr else "NO"
         row(f"{loc} Provide", f"min(req, {fmt(s_avmin, 0)})", "-", f"{stirKey}@{fmt(s_sel / 10, 0)}cm", "-",
             status_shear)
 
     sec("4. FINAL STATUS")
-    final_status = "OK" if (flex_ok and shear_ok) else "NOT OK"
-    row("Overall", "-", "-", final_status, "-", final_status)
+    row("Overall", "-", "-", "OK" if (flex_ok and shear_ok) else "NOT OK", "-", "")
     return calc_rows, bar_counts, shear_res
 
 
 # ==========================================
-# 3. PDF GENERATION (FIXED FONT)
+# 3. PDF GENERATION
 # ==========================================
 class PDF(FPDF):
     def header(self):
-        pass  # Handle manually
+        pass
 
 
 def create_pdf_bytes(inputs, rows, img_files):
     pdf = PDF()
 
-    # 1. โหลดฟอนต์ (บังคับโหลดให้ได้)
-    font_path = check_font()
-    if not font_path:
-        # ถ้าโหลดไม่ได้จริงๆ ให้ใช้ Arial (แต่จะแจ้งเตือนใน UI)
-        has_thai = False
-        st.error("⚠️ ไม่สามารถโหลดฟอนต์ภาษาไทยได้ รายงานจะแสดงเป็นภาษาอังกฤษ")
-    else:
-        has_thai = True
-        pdf.add_font('THSarabunNew', '', font_path, uni=True)
-        pdf.add_font('THSarabunNew', 'B', font_path, uni=True)
+    # ใช้ฟอนต์ที่โหลดมา
+    has_thai = False
+    if font_path and os.path.exists(font_path):
+        try:
+            pdf.add_font('THSarabunNew', '', font_path, uni=True)
+            pdf.add_font('THSarabunNew', 'B', font_path, uni=True)
+            has_thai = True
+        except:
+            pass
 
+    # ฟังก์ชันช่วยพิมพ์ข้อความ (ถ้าไม่มีฟอนต์ไทย จะตัดคำไทยออก)
     def txt(s):
         s = str(s)
         if has_thai: return s
-        # Safe Mode: ตัดคำไทยทิ้งถ้าไม่มีฟอนต์
         return s.encode('latin-1', 'ignore').decode('latin-1')
 
     pdf.add_page()
 
-    # ตั้งค่าฟอนต์
+    # Config Font Size
     if has_thai:
         header_font = ('THSarabunNew', 'B', 16)
         body_font = ('THSarabunNew', '', 14)
@@ -374,10 +369,10 @@ def create_pdf_bytes(inputs, rows, img_files):
     pdf.set_font(header_font[0], 'B', 14 if has_thai else 12)
     pdf.cell(0, 10, txt("Calculation Details"), 0, 1)
 
-    # Table Header (Adjusted Widths)
     pdf.set_fill_color(220, 220, 220)
     pdf.set_font(header_font[0], 'B', 12 if has_thai else 10)
-    # Col Widths: Item, Formula, Sub, Res, Unit, Status
+
+    # ปรับความกว้างตาราง
     cols = [35, 45, 45, 20, 15, 30]
     headers = ["Item", "Formula", "Substitution", "Result", "Unit", "Status"]
 
@@ -385,7 +380,6 @@ def create_pdf_bytes(inputs, rows, img_files):
         pdf.cell(cols[i], 8, txt(h), 1, 0, 'C', True)
     pdf.ln()
 
-    # Table Rows
     pdf.set_font(*table_font)
     for r in rows:
         if r[0] == "SECTION":
@@ -398,7 +392,6 @@ def create_pdf_bytes(inputs, rows, img_files):
             pdf.cell(cols[3], 7, txt(str(r[3])), 1)
             pdf.cell(cols[4], 7, txt(str(r[4])), 1)
 
-            # Status
             status_txt = txt(str(r[5]))
             if "OK" in status_txt or "PASS" in status_txt:
                 pdf.set_text_color(0, 100, 0)
@@ -407,7 +400,6 @@ def create_pdf_bytes(inputs, rows, img_files):
             pdf.cell(cols[5], 7, status_txt, 1, 1, 'C')
             pdf.set_text_color(0, 0, 0)
 
-    # Save
     temp = "report.pdf"
     pdf.output(temp)
     with open(temp, "rb") as f:
@@ -468,12 +460,18 @@ st.markdown("""
 
 st.title("RC Beam Designer Pro (ACI 318-19)")
 
+# แสดงสถานะฟอนต์
+if font_path:
+    st.sidebar.success("✅ โหลดฟอนต์ภาษาไทยสำเร็จ")
+else:
+    st.sidebar.error("⚠️ ไม่พบฟอนต์ภาษาไทย (ใช้ภาษาอังกฤษแทน)")
+
 if 'calc_done' not in st.session_state:
     st.session_state['calc_done'] = False
 
 with st.sidebar.form("inputs"):
     st.header("Project Info")
-    # --- UPDATED DEFAULT VALUES ---
+    # --- FIXED DEFAULT VALUES HERE ---
     project_name = st.text_input("Project Name", value="อาคารสำนักงาน 2 ชั้น")
     engineer_name = st.text_input("Engineer Name", value="นายไกรฤทธิ์ ด่านพิทักษ์")
 
