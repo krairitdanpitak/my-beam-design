@@ -75,7 +75,7 @@ def fmt(n, digits=3):
 
 
 # ==========================================
-# 3. CALCULATION LOGIC
+# 3. CALCULATION LOGIC (DETAILED)
 # ==========================================
 def beta1FromFc(fc_MPa):
     if fc_MPa <= 28: return 0.85
@@ -167,6 +167,7 @@ def process_calculation(inputs):
     stirKey = inputs['stirrupBar']
     db_main = BAR_INFO[barKey]['d_mm']
     db_st = BAR_INFO[stirKey]['d_mm']
+
     d = h - cover - db_st - (db_main / 2.0)
 
     # 1. MATERIALS
@@ -476,7 +477,7 @@ def generate_full_html_report(inputs, rows, img_b64_list):
             <img src="{img_b64_list[2]}" />
         </div>
 
-        <br><br>
+        <br><br><br>
 
         <h3>Calculation Details</h3>
         <table>
