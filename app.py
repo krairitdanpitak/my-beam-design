@@ -10,7 +10,7 @@ import pandas as pd
 # ==========================================
 st.set_page_config(page_title="RC Beam Designer Pro", layout="wide")
 
-# Rebar Database (Based on Source)
+# Rebar Database
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
     'RB9': {'A_cm2': 0.636, 'd_mm': 9},
@@ -24,7 +24,7 @@ BAR_INFO = {
 
 
 def fmt(n, digits=3):
-    """Format helper (Source)"""
+    """Format helper"""
     try:
         if n is None: return "-"
         val = float(n)
@@ -35,7 +35,7 @@ def fmt(n, digits=3):
 
 
 # ==========================================
-# 2. CALCULATION ENGINE (ACI 318-19)
+# 2. CALCULATION LOGIC (ACI 318-19)
 # ==========================================
 def beta1FromFc(fc_MPa):
     """(Source)"""
@@ -62,8 +62,7 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
 
     # Iterate
     for i in range(50):
-        if c <= 0.1: c = 0.1  # Prevent div/0
-
+        if c <= 0.1: c = 0.1
         eps_t = eps_cu * (d - c) / c
         fs_new = min(fy, Es * eps_t)
         fs_new = max(fs_new, -fy)
@@ -89,12 +88,38 @@ def flexureSectionResponse(As_mm2, fc, fy, bw, d, Es=200000, eps_cu=0.003):
     return {'beta1': beta1, 'a': a, 'c': c, 'eps_t': eps_t, 'fs': fs, 'phi': phi, 'Mn': Mn, 'phiMn': phiMn}
 
 
+def solve_required_as(Mu_Nmm, As_min, As_max, fc, fy, bw, d):
+    """Helper function to solve As (Fixes indentation issues)"""
+    As_lo = As_min
+    As_hi = As_lo
+
+    # Expand Hi
+    for _ in range(30):
+        r = flexureSectionResponse(As_hi, fc, fy, bw, d)
+        if r['phiMn'] >= Mu_Nmm: break
+        As_hi *= 1.3
+        if As_hi > As_max:
+            As_hi = As_max
+            break
+
+    # Binary Search
+    As_req = As_hi
+    for _ in range(50):
+        As_mid = 0.5 * (As_lo + As_hi)
+        r = flexureSectionResponse(As_mid, fc, fy, bw, d)
+        if r['phiMn'] >= Mu_Nmm:
+            As_hi = As_mid
+        else:
+            As_lo = As_mid
+
+    return As_hi
+
+
 def process_calculation(inputs):
-    """Main Logic (Source)"""
+    """Main Logic"""
     calc_rows = []
 
-    def sec(title):
-        calc_rows.append(["SECTION", title, "", "", "", ""])
+    def sec(title): calc_rows.append(["SECTION", title, "", "", "", ""])
 
     def row(item, formula, subs, result, unit, status=""):
         calc_rows.append([item, formula, subs, result, unit, status])
@@ -105,7 +130,6 @@ def process_calculation(inputs):
     cover_cm = inputs['cover']
     agg_mm = inputs.get('agg', 20)
 
-    # Convert ksc -> MPa (Source)
     ksc_to_MPa = 0.0980665
     fc = inputs['fc'] * ksc_to_MPa
     fy = inputs['fy'] * ksc_to_MPa
@@ -126,12 +150,11 @@ def process_calculation(inputs):
     sec("1. MATERIAL & SECTION PARAMETERS")
     beta1 = beta1FromFc(fc)
 
-    # As Min (Source)
+    # As Min/Max
     rho1 = 0.25 * math.sqrt(fc) / fy
     rho2 = 1.4 / fy
     As_min = max(rho1, rho2) * bw * d
 
-    # As Max (Source)
     Es = 200000
     eps_cu = 0.003
     eps_y = fy / Es
@@ -146,33 +169,4 @@ def process_calculation(inputs):
     sec("2. FLEXURE DESIGN")
 
     MuCases = [
-        {'key': "L_TOP", 'title': "Left (Top) Mu(-)", 'Mu_tfm': inputs['mu_L_n']},
-        {'key': "L_BOT", 'title': "Left (Bot) Mu(+)", 'Mu_tfm': inputs['mu_L_p']},
-        {'key': "M_TOP", 'title': "Mid (Top) Mu(-)", 'Mu_tfm': inputs['mu_M_n']},
-        {'key': "M_BOT", 'title': "Mid (Bot) Mu(+)", 'Mu_tfm': inputs['mu_M_p']},
-        {'key': "R_TOP", 'title': "Right (Top) Mu(-)", 'Mu_tfm': inputs['mu_R_n']},
-        {'key': "R_BOT", 'title': "Right (Bot) Mu(+)", 'Mu_tfm': inputs['mu_R_p']},
-    ]
-
-    bar_counts = {}
-    flex_ok = True
-
-    for case in MuCases:
-        title = case['title']
-        Mu_tfm = case['Mu_tfm']
-        key = case['key']
-
-        # --- FIX: Handle Mu=0 correctly (Source) ---
-        if Mu_tfm <= 0.001:
-            bar_counts[key] = 2  # Min bars
-            # Skip row output but KEEP data in bar_counts
-            continue
-
-        Mu_Nmm = Mu_tfm * 9806650.0
-
-        # Binary Search for As (Source)
-        As_lo = As_min
-        As_hi = As_lo
-
-        # Expand
-        for _ in
+        {'key': "L_
